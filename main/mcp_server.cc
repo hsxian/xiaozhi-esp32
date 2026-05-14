@@ -18,6 +18,8 @@
 #include "lvgl_theme.h"
 #include "lvgl_display.h"
 
+#include "clock/alarm_manager.h"
+
 #define TAG "MCP"
 
 McpServer::McpServer() {
@@ -75,6 +77,12 @@ void McpServer::AddCommonTools() {
                 backlight->SetBrightness(brightness, true);
                 return true;
             });
+    }
+
+    std::vector<McpTool*> tools;
+    AlarmManager::GetInstance().GenerateMcpServerTools(tools);
+    for (auto tool : tools) {
+        AddTool(tool);
     }
 
 #ifdef HAVE_LVGL

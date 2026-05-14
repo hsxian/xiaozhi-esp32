@@ -17,6 +17,9 @@
 #include <arpa/inet.h>
 #include <font_awesome.h>
 
+#include "clock/alarm_manager.h"
+#include "clock/alarm_event_config.h"
+
 #define TAG "Application"
 
 
@@ -160,6 +163,8 @@ void Application::Initialize() {
 
     // Update the status bar immediately to show the network state
     display->UpdateStatusBar(true);
+
+    AlarmManager::GetInstance().Initialize();
 }
 
 void Application::Run() {
@@ -179,7 +184,9 @@ void Application::Run() {
         MAIN_EVENT_START_LISTENING |
         MAIN_EVENT_STOP_LISTENING |
         MAIN_EVENT_ACTIVATION_DONE |
-        MAIN_EVENT_STATE_CHANGED;
+        MAIN_EVENT_STATE_CHANGED |
+        MAIN_EVENT_ARARM_CLOCK_RINGING
+        ;
 
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
@@ -255,6 +262,10 @@ void Application::Run() {
                 SystemInfo::PrintHeapStats();
             }
         }
+
+        if (bits & MAIN_EVENT_ARARM_CLOCK_RINGING) {
+            AlarmEventConfig::GetInstance().HandleAlarmRingingEvent(aborted_, protocol_);
+        }
     }
 }
 
@@ -281,6 +292,8 @@ void Application::HandleNetworkConnectedEvent() {
     // Update the status bar immediately to show the network state
     auto display = Board::GetInstance().GetDisplay();
     display->UpdateStatusBar(true);
+
+    AlarmManager::GetInstance().LoadHolidays();
 }
 
 void Application::HandleNetworkDisconnectedEvent() {
@@ -817,6 +830,9 @@ void Application::HandleWakeWordDetectedEvent() {
         // Restart the activation check if the wake word is detected during activation
         SetDeviceState(kDeviceStateIdle);
     }
+    else if (state == kDeviceStateAlarmClock) {
+        AlarmEventConfig::GetInstance().HandleWakeWordDetected(wake_word, protocol_);
+    }
 }
 
 void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
@@ -857,7 +873,7 @@ void Application::HandleStateChangedEvent() {
     auto display = board.GetDisplay();
     auto led = board.GetLed();
     led->OnStateChanged();
-    
+
     switch (new_state) {
         case kDeviceStateUnknown:
         case kDeviceStateIdle:
@@ -917,6 +933,11 @@ void Application::HandleStateChangedEvent() {
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(false);
             break;
+
+        case kDeviceStateAlarmClock:
+            AlarmEventConfig::GetInstance().SetDeviceState();
+            break;
+
         default:
             // Do nothing
             break;
@@ -1114,3 +1135,10 @@ void Application::ResetProtocol() {
     });
 }
 
+void Application::AppendEventToGroup(EventBits_t event_bits) {
+    xEventGroupSetBits(event_group_, event_bits);
+}
+
+void Application::ClearEventFromGroup(EventBits_t event_bits) {
+    xEventGroupClearBits(event_group_, event_bits);
+}

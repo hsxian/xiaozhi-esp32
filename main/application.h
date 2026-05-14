@@ -34,6 +34,7 @@
 #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
 #define MAIN_EVENT_PLAYBACK_DRAINED     (1 << 13)
 
+#define MAIN_EVENT_ARARM_CLOCK_RINGING (1 << 13)
 
 enum AecMode {
     kAecOff,
@@ -122,6 +123,9 @@ public:
      * This includes closing audio channel, resetting protocol and ota objects
      */
     void ResetProtocol();
+
+    void AppendEventToGroup(EventBits_t event_bits);
+    void ClearEventFromGroup(EventBits_t event_bits);
 
 private:
     Application();

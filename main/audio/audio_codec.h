@@ -25,6 +25,7 @@ public:
     virtual void EnableOutput(bool enable);
 
     virtual void OutputData(std::vector<int16_t>& data);
+    virtual void OutputData(const int16_t* data, int samples);
     virtual bool InputData(std::vector<int16_t>& data);
     virtual void Start();
 

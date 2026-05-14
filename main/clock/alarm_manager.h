@@ -80,6 +80,8 @@ public:
 
     bool IsRinging() const;
 
+    void GetCurrentRingingAlarm(Alarm& out_alarm) const;
+
 private:
     AlarmManager();
 
@@ -94,8 +96,9 @@ private:
 
     // 更新定时器
     void UpdateTimer();
-    void UpdateTimerLocked();
 
+    void UpdateTimerLocked();
+    bool RemoveAlarmLocked(const std::string& alarm_id);
     // 定时器回调函数
     static void TimerCallback(void* arg);
 

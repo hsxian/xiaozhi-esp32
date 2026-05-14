@@ -143,6 +143,11 @@ dependencies:
     public: true
     version: '*'
 
+  chmorgan/esp-libhelix-mp3:
+    version: "*"
+    rules:
+    - if: target in [esp32s3, esp32p4]
+
   ## Required IDF version
   idf:
     version: '>=5.5.2'

@@ -18,6 +18,10 @@ void AudioCodec::OutputData(std::vector<int16_t>& data) {
     Write(data.data(), data.size());
 }
 
+void AudioCodec::OutputData(const int16_t* data, int samples) {
+    Write(data, samples);
+}
+
 bool AudioCodec::InputData(std::vector<int16_t>& data) {
     int samples = Read(data.data(), data.size());
     if (samples > 0) {

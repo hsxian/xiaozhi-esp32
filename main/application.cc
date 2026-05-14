@@ -831,7 +831,10 @@ void Application::HandleWakeWordDetectedEvent() {
         SetDeviceState(kDeviceStateIdle);
     }
     else if (state == kDeviceStateAlarmClock) {
-        AlarmEventConfig::GetInstance().HandleWakeWordDetected(wake_word, protocol_);
+        if (AlarmEventConfig::GetInstance().HandleWakeWordDetected(wake_word, protocol_)) {
+            SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop
+                                                  : kListeningModeRealtime);
+        }
     }
 }
 

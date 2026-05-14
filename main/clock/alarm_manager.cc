@@ -312,7 +312,9 @@ bool AlarmManager::AddAlarm(const Alarm& alarm) {
 
 bool AlarmManager::RemoveAlarm(const std::string& alarm_id) {
     std::lock_guard<std::mutex> lock(mutex_);
-
+    return RemoveAlarmLocked(alarm_id);
+}
+bool AlarmManager::RemoveAlarmLocked(const std::string& alarm_id) {
     auto it = std::find_if(alarms_.begin(), alarms_.end(),
                            [&](const Alarm& a) { return a.id == alarm_id; });
 
@@ -409,7 +411,7 @@ void AlarmManager::StopRinging() {
         if (it != alarms_.end()) {
             it->state = AlarmState::ENABLED;
             if (it->repeat_mode == RepeatMode::ONCE) {
-                RemoveAlarm(it->id);
+                RemoveAlarmLocked(it->id);
             }
         }
 
@@ -419,6 +421,12 @@ void AlarmManager::StopRinging() {
 }
 
 void AlarmManager::Snooze() {
+    if (original_volume_ > 0) {
+        auto& board = Board::GetInstance();
+        auto audio_codec = board.GetAudioCodec();
+        audio_codec->SetOutputVolume(original_volume_);
+    }
+
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (!is_ringing_) {
@@ -604,6 +612,7 @@ void AlarmManager::OnAlarmTriggered() {
 
         // 设置为响铃状态
         alarm.state = AlarmState::RINGING;
+        alarm.start_ring_time = now;
         current_ringing_alarm_ = alarm;
         is_ringing_ = true;
 
@@ -624,7 +633,7 @@ void AlarmManager::CallAlarmCallback(const Alarm& alarm) {
     auto& board = Board::GetInstance();
     auto audio_codec = board.GetAudioCodec();
     original_volume_ = audio_codec->output_volume();
-    audio_codec->SetOutputVolume(alarm.volume);
+    // audio_codec->SetOutputVolume(alarm.volume);
 
     auto& app = Application::GetInstance();
     auto display = Board::GetInstance().GetDisplay();
@@ -653,3 +662,7 @@ void AlarmManager::CallAlarmStopCallback(const Alarm& alarm) {
 }
 
 bool AlarmManager::IsRinging() const { return is_ringing_; }
+
+void AlarmManager::GetCurrentRingingAlarm(Alarm& out_alarm) const {
+    out_alarm = current_ringing_alarm_;
+}

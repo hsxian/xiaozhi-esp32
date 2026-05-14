@@ -36,7 +36,7 @@ struct Alarm {
     AlarmState state;        // 闹钟状态
     int snooze_duration;     // 贪睡时长（分钟），默认5分钟
     int snooze_count;        // 剩余贪睡次数，-1表示无限次
-
+    time_t start_ring_time;   // 开始响铃时间
     // 默认构造函数
     Alarm();        
 

@@ -1,10 +1,11 @@
 #include "alarm_event_config.h"
 #include "alarm_manager.h"
 #include "assets/lang_config.h"
+#include "board.h"
 #include "device_state.h"
+#include "display.h"
 #include "esp_log.h"
 #include "freertos/event_groups.h"
-#include "board.h"
 
 #define TAG "AlarmEventConfig"
 
@@ -23,10 +24,10 @@ bool AlarmEventConfig::HandleAlarmRingingEvent(bool& aborted, std::unique_ptr<Pr
     auto& app = Application::GetInstance();
     auto device_state = app.GetDeviceState();
     static bool to_clear_alarm_event = false;
-    static time_t to_alarm_event_time = time(NULL);
-    ESP_LOGI(TAG, "handle alarm ring event, device state %d", device_state);
+    ESP_LOGD(TAG, "handle alarm ring event, device state %d", device_state);
     if (alram_manager.IsRinging()) {
-        ESP_LOGI(TAG, "Alarm ring, ringing");
+        Alarm current_alarm;
+        alram_manager.GetCurrentRingingAlarm(current_alarm);
         if (device_state != kDeviceStateAlarmClock) {
             if (device_state == kDeviceStateActivating) {
                 ESP_LOGI(TAG, "Alarm ring, reboot");
@@ -35,7 +36,7 @@ bool AlarmEventConfig::HandleAlarmRingingEvent(bool& aborted, std::unique_ptr<Pr
             } else if (device_state == kDeviceStateSpeaking) {
                 app.AbortSpeaking(kAbortReasonNone);
                 protocol->CloseAudioChannel();
-                aborted = false; 
+                aborted = false;
                 ESP_LOGI(TAG, "Alarm ring, abort speaking");
             } else if (device_state == kDeviceStateListening) {
                 ESP_LOGI(TAG, "Alarm ring, close audio channel");
@@ -47,24 +48,39 @@ bool AlarmEventConfig::HandleAlarmRingingEvent(bool& aborted, std::unique_ptr<Pr
             }
             ESP_LOGI(TAG, "Alarm ring, begging status %d", device_state);
             app.SetDeviceState(kDeviceStateAlarmClock);
-            to_alarm_event_time = time(NULL);
-            // auto display = Board::GetInstance().GetDisplay();
-            // display->SetChatMessage("system", general_timer_->GetAlarmMessage().c_str());
-            // display->SetEmotion("neutral");
-        }else{
-            ESP_LOGI(TAG, "Alarm ring, already in alarm clock state");
+            
+            auto display = Board::GetInstance().GetDisplay();
+
+            display->SetChatMessage("system", current_alarm.name.c_str());
+            display->SetEmotion("neutral");
         }
-        auto & audio_service = app.GetAudioService();
-        app.AppendEventToGroup(MAIN_EVENT_ARARM_CLOCK_RINGING);
+
+        auto now = time(NULL);
+        int ringing_seconds = 120;
+        int time_diff = difftime(now, current_alarm.start_ring_time);
+        int start_volume = 30;
+        auto& board = Board::GetInstance();
+        auto audio_codec = board.GetAudioCodec();
+        int vol =
+            start_volume + time_diff * (current_alarm.volume - start_volume) / ringing_seconds;
+        vol = std::min(vol, current_alarm.volume);
+        if (time_diff % 3 == 0 && vol != audio_codec->output_volume()) {
+            audio_codec->SetOutputVolume(vol);
+        }
+
+        auto& audio_service = app.GetAudioService();
         if (audio_service.IsIdle()) {
             app.PlaySound(Lang::Sounds::OGG_ALARM_RING);
         }
+
+        app.AppendEventToGroup(MAIN_EVENT_ARARM_CLOCK_RINGING);
         to_clear_alarm_event = true;
-        auto now = time(NULL);
-        if (difftime(now, to_alarm_event_time) > 60) {
-            to_alarm_event_time = time(NULL);
+
+
+        if (time_diff > ringing_seconds) {
             alram_manager.Snooze();
         }
+
     } else {
         if (to_clear_alarm_event) {
             app.ClearEventFromGroup(MAIN_EVENT_ARARM_CLOCK_RINGING);
@@ -76,8 +92,8 @@ bool AlarmEventConfig::HandleAlarmRingingEvent(bool& aborted, std::unique_ptr<Pr
 
 void AlarmEventConfig::SetDeviceState() {
     auto& app = Application::GetInstance();
-    auto & audio_service = app.GetAudioService();
-    auto & board = Board::GetInstance();
+    auto& audio_service = app.GetAudioService();
+    auto& board = Board::GetInstance();
     auto codec = board.GetAudioCodec();
 
     audio_service.ResetDecoder();
@@ -85,18 +101,21 @@ void AlarmEventConfig::SetDeviceState() {
     audio_service.EnableVoiceProcessing(false);
     audio_service.EnableWakeWordDetection(true);
     // display->SetStatus(Lang::Strings::ALARM);
+    auto display = board.GetDisplay();
+    display->SetStatus("alarm clock ringing");
 }
 
-bool AlarmEventConfig::HandleWakeWordDetected(const std::string& wake_word, std::unique_ptr<Protocol>& protocol) {
+bool AlarmEventConfig::HandleWakeWordDetected(const std::string& wake_word,
+                                              std::unique_ptr<Protocol>& protocol) {
     auto& alram_manager = AlarmManager::GetInstance();
-    
+
     alram_manager.StopRinging();
     ESP_LOGI(TAG, "Alarm detected, start listening");
-    
+
     auto& app = Application::GetInstance();
-    auto & audio_service = app.GetAudioService();
+    auto& audio_service = app.GetAudioService();
     audio_service.EncodeWakeWord();
-    
+
     if (!protocol->IsAudioChannelOpened()) {
         app.SetDeviceState(kDeviceStateConnecting);
         ESP_LOGI(TAG, "Alarm detected, start connecting");
@@ -107,5 +126,19 @@ bool AlarmEventConfig::HandleWakeWordDetected(const std::string& wake_word, std:
         }
     }
 
+    ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+#if CONFIG_SEND_WAKE_WORD_DATA
+    // Encode and send the wake word data to the server
+    while (auto packet = audio_service.PopWakeWordPacket()) {
+        protocol->SendAudio(std::move(packet));
+    }
+    // Set the chat state to wake word detected
+    protocol->SendWakeWordDetected(wake_word);
+    // SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
+#else
+    // SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
+    // Play the pop up sound to indicate the wake word is detected
+    audio_service.PlaySound(Lang::Sounds::OGG_POPUP);
+#endif
     return true;
 }

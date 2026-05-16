@@ -161,7 +161,7 @@ void SingleLed::OnStateChanged() {
             StartContinuousBlink(500);
             break;
         case kDeviceStateAlarmClock:
-            SetColor(0, DEFAULT_BRIGHTNESS, 0);
+            SetColor(DEFAULT_BRIGHTNESS, DEFAULT_BRIGHTNESS, 0);
             StartContinuousBlink(500);
             break;
         default:

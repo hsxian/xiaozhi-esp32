@@ -343,12 +343,10 @@ bool AlarmManager::RemoveAllAlarms() {
 }
 
 std::vector<Alarm> AlarmManager::GetAlarms() const {
-    std::lock_guard<std::mutex> lock(mutex_);
     return alarms_;
 }
 
 bool AlarmManager::GetAlarm(const std::string& alarm_id, Alarm& out_alarm) const {
-    std::lock_guard<std::mutex> lock(mutex_);
 
     auto it = std::find_if(alarms_.begin(), alarms_.end(),
                            [&](const Alarm& a) { return a.id == alarm_id; });
@@ -469,23 +467,19 @@ void AlarmManager::SetAlarmStopCallback(AlarmStopCallback callback) {
 }
 
 void AlarmManager::AddHoliday(const Holiday& holiday) {
-    std::lock_guard<std::mutex> lock(mutex_);
     holidays_.push_back(holiday);
 }
 
 std::vector<Holiday> AlarmManager::GetHolidays() const {
-    std::lock_guard<std::mutex> lock(mutex_);
     return holidays_;
 }
 
 bool AlarmManager::IsHoliday(int month, int day, int weekday) const {
-    std::lock_guard<std::mutex> lock(mutex_);
 
     if (holidays_.empty()) {
         return weekday == 0 || weekday == 6;
     }
     for (const auto& holiday : holidays_) {
-        ESP_LOGI(TAG, "Holiday: %s, %02d-%02d, %d", holiday.name.c_str(), holiday.month, holiday.day, holiday.is_offday);
         if (holiday.month == month && holiday.day == day && holiday.is_offday) {
             return true;
         }
@@ -494,7 +488,6 @@ bool AlarmManager::IsHoliday(int month, int day, int weekday) const {
 }
 
 bool AlarmManager::IsWorkday(int month, int day, int weekday) const {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (holidays_.empty()) {
         return weekday != 0 && weekday != 6;
     }
@@ -514,7 +507,7 @@ bool AlarmManager::ShouldRingToday(const Alarm& alarm) const {
     int month = tm->tm_mon + 1;  // 1-12
     int day = tm->tm_mday;       // 1-31
     ESP_LOGI(TAG,
-             "ShouldRingToday Current time: %02d-%02d-%02d, weekday: %d, repeat mode: %d , repeat "
+             "ShouldRingToday ? alarm time: %02d-%02d-%02d, weekday: %d, repeat mode: %d , repeat "
              "days: %d",
              alarm.hour, alarm.minute, alarm.second, weekday, alarm.repeat_mode, alarm.repeat_days);
     switch (alarm.repeat_mode) {

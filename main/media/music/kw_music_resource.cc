@@ -44,7 +44,7 @@ bool KwMusicResource::Search(const QueryBase& query, std::vector<Music>& music_l
         Music::FromJsonArray(data, music_list);
         for (auto& music : music_list) {
             // 替换url中level=exhigh为level=standard，获取标准品质的音乐URL
-            music.url = ReplaceString(music.url, "level=exhigh", "level=standard");
+            // music.url = ReplaceString(music.url, "level=exhigh", "level=standard");
         }
         success = music_list.size() > 0;
     } else {

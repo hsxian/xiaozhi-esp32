@@ -79,11 +79,13 @@ void RestfulClient::TryGetRedirectUrl(const std::string& url, std::string& redir
     int status_code = http->GetStatusCode();
     if (status_code == 301 || status_code == 302 || status_code == 307 || status_code == 308) {
         redirect_url = http->GetResponseHeader("Location");
+        http->Close();
         ESP_LOGI(TAG, "Redirect URL: %s", redirect_url.c_str());   
         auto normalized_url = NormalizeUrl(redirect_url);
         TryGetRedirectUrl(normalized_url, redirect_url, max_redirects - 1);
+    }else {
+        http->Close();
     }
-    http->Close();
 }
 
 std::string RestfulClient::NormalizeUrl(const std::string& url) {

@@ -19,9 +19,29 @@
 
 #include "clock/alarm_event_config.h"
 #include "clock/alarm_manager.h"
-#include "media/music/mp3_music_player.h"
+#include "media/music/music_manager.h"
+
 #define TAG "Application"
 
+#define TEST 0
+
+#if TEST
+#include "media/music/mp3_music_player.h"
+void testNoNetwork() {
+    for (int i = 0; i < 5; i++) {
+        AlarmManager::GetInstance().AddAlarm(Alarm("alarm_" + std::to_string(i),
+                                                   "alarm_" + std::to_string(i) + "下班了", 17, 25,
+                                                   64, 30, RepeatMode::HOLIDAYS, 64));
+    }
+}
+void testOnNetwork() {
+    Music music;
+    music.name = "随机";
+    music.url = "http://music.163.com/song/media/outer/url?id=447925558.mp3";
+    auto mp = new Mp3MusicPlayer();
+    mp->Play(music);
+}
+#endif
 
 Application::Application() {
     event_group_ = xEventGroupCreate();
@@ -352,13 +372,6 @@ void Application::HandleActivationDoneEvent() {
     });
 }
 
-void test (){
-    Music music;
-    music.name = "夜曲";
-    music.url = "http://music.163.com/song/media/outer/url?id=447925558.mp3";
-    auto mp = new Mp3MusicPlayer();
-    mp->Play(music);
-}
 void Application::ActivationTask() {
     // Create OTA object for activation process
     ota_ = std::make_unique<Ota>();
@@ -373,6 +386,10 @@ void Application::ActivationTask() {
     InitializeProtocol();
 
     AlarmManager::GetInstance().LoadHolidays();
+
+    #if TEST
+    testOnNetwork();
+    #endif
 
     // Signal completion to main loop
     xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
@@ -915,6 +932,8 @@ void Application::HandleStateChangedEvent() {
     auto display = board.GetDisplay();
     auto led = board.GetLed();
     led->OnStateChanged();
+
+    MusicManager::GetInstance().HandleDeviceStateChange(new_state);
 
     switch (new_state) {
         case kDeviceStateUnknown:

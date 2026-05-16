@@ -5,23 +5,28 @@
 #include <atomic>
 #include <mutex>
 #include "music.h"
+#include "device_state.h"
 
 class McpTool;
-class Mp3MusicPlayer;
+class MusicPlayer;
 
 class MusicManager {
-public:
-    static MusicManager& GetInstance();
+    public : static MusicManager& GetInstance();
 
     // 生成MCP服务器工具
-    void GenerateMcpServerTools(std::vector<McpTool*>& tools);
+    void GenerateMcpServerTools(std::vector<McpTool*> & tools);
 
-private:
-    MusicManager();
+    void HandleDeviceStateChange(const DeviceState& state);
+
+    private : MusicManager();
     ~MusicManager() = default;
 
-    std::vector<Music> music_search_list_;
-    std::vector<Music> music_list_;
+    void TryResleaseMusicPlayer();
 
-    Mp3MusicPlayer* mp3_player_ = nullptr;
+    std::vector<Music>
+        music_search_list_;
+    std::vector<Music>
+        music_list_;
+
+    MusicPlayer* music_player_ = nullptr;
 };

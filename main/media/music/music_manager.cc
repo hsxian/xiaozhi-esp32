@@ -25,8 +25,8 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                             "to search, and you can also provide page number and page size for "
                             "pagination. The result will be a list of music in JSON format.",
                             PropertyList({Property("keyword", kPropertyTypeString),
-                                          Property("page", kPropertyTypeInteger),
-                                          Property("pageSize", kPropertyTypeInteger)}),
+                                          Property("page", kPropertyTypeInteger, 1),
+                                          Property("pageSize", kPropertyTypeInteger, 10)}),
                             [this](const PropertyList& properties) -> ReturnValue {
                                 // Implement search logic here
                                 QueryBase query;
@@ -54,25 +54,50 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
             // Implement play logic here
             bool is_search_result_or_music_list =
                 properties["searchResultOrMusicList"].value<bool>();
-            if (mp3_player_ == nullptr) {
-                mp3_player_ = new Mp3MusicPlayer();
+            if (music_player_ == nullptr) {
+                music_player_ = new Mp3MusicPlayer();
             }
-            if (is_search_result_or_music_list) {
-                if (!music_search_list_.empty()) {
-                    mp3_player_->Play(music_search_list_);
-                    return true;
-                }
-            } else {
-                if (!music_list_.empty()) {
-                    mp3_player_->Play(music_list_);
-                    return true;
-                }
+            auto musics = is_search_result_or_music_list ? music_search_list_ : music_list_;
+            if (!musics.empty()) {
+                music_player_->Play(musics);
+                return true;
             }
-            if (!mp3_player_->IsPlaying()) {
-                delete mp3_player_;
-                mp3_player_ = nullptr;
-            }
+            TryResleaseMusicPlayer();
             return false;
         });
     tools.push_back(tool);
+
+    // 播放音乐控制
+    tool = new McpTool(
+        "self.music.playControl",
+        "a tool to control music playback. You must provide the control mode to use. The control "
+        "mode can be one of the following values: 2 for pause, 3 for resume, 4 for stop, 5 for "
+        "next track, 6 for previous track.",
+        PropertyList({Property(
+            "controlMode", kPropertyTypeInteger, MusicPlayer::PlayControlMode::kPause,
+            MusicPlayer::PlayControlMode::kPause, MusicPlayer::PlayControlMode::kPrevious)}),
+        [this](const PropertyList& properties) -> ReturnValue {
+            // Implement play logic here
+            int controlMode = properties["controlMode"].value<int>();
+            if (music_player_ == nullptr || music_player_->IsPlaying() == false) {
+                return false;
+            }
+            music_player_->ChangePlayControlMode(
+                static_cast<MusicPlayer::PlayControlMode>(controlMode));
+            return true;
+        });
+    tools.push_back(tool);
+}
+
+void MusicManager::TryResleaseMusicPlayer() {
+    if (music_player_ && !music_player_->IsPlaying()) {
+        delete music_player_;
+        music_player_ = nullptr;
+    }
+}
+void MusicManager::HandleDeviceStateChange(const DeviceState& state) {
+    if (state != kDeviceStateIdle && music_player_ && music_player_->IsPlaying()) {
+        ESP_LOGI(TAG, "Device state changed to %d, pausing music playback", state);
+        music_player_->ChangePlayControlMode(MusicPlayer::PlayControlMode::kPause);
+    }
 }

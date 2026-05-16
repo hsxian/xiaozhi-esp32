@@ -15,21 +15,14 @@ bool MusicPlayer::IsNeedWaitPalySattus() const {
             ESP_LOGI(
                 TAG,
                 "Device is in speaking state, switching to listening state for music playback");
-            // app.Schedule([this, &app]() { app.AbortSpeaking(kAbortReasonNone); });
-            // app.SetDeviceState(kDeviceStateListening);
         }
         if (current_state == kDeviceStateListening) {
             ESP_LOGI(TAG,
                      "Device is in listening state, switching to idle state for music playback");
-            // app.Schedule([this, &app]() { app.StopListening(); });
-
         }
         // 切换状态
         app.ToggleChatState();  // 变成待机状态
         return true;
-    } else if (current_state != kDeviceStateIdle) {  // 不是待机状态，就一直卡在这里，不让播放音乐
-        ESP_LOGD(TAG, "Device state is %d, pausing music playback", current_state);
-        return true;
     }
-    return false;
+    return current_state != kDeviceStateIdle;  // 其他状态都需要等待
 }

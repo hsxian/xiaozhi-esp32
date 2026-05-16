@@ -133,6 +133,7 @@ public:
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
     void SetModelsList(srmodel_list_t* models_list);
+    void UpdateLastOutputTime() { last_output_time_ = std::chrono::steady_clock::now(); }
 
 private:
     AudioCodec* codec_ = nullptr;

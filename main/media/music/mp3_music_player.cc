@@ -15,7 +15,7 @@ extern "C" {
 #include <mp3dec.h>
 }
 
-Mp3MusicPlayer::Mp3MusicPlayer() {}
+Mp3MusicPlayer::Mp3MusicPlayer() : audio_codec_(Board::GetInstance().GetAudioCodec()) {}
 Mp3MusicPlayer::~Mp3MusicPlayer() {}
 
 bool Mp3MusicPlayer::Play(const Music& music) {
@@ -71,15 +71,14 @@ void Mp3MusicPlayer::PlayTask(void* arg) {
 
 bool Mp3MusicPlayer::IsPlaying() const { return is_playing_; }
 
-bool Mp3MusicPlayer::PreparePlayback(const Music& music, AudioCodec*& audio_codec,
+bool Mp3MusicPlayer::PreparePlayback(const Music& music, 
                                      NetworkInterface*& network, std::string& final_url,
                                      std::unique_ptr<Http>& http) {
     auto& board = Board::GetInstance();
-    audio_codec = board.GetAudioCodec();
     network = board.GetNetwork();
 
-    if (!audio_codec || !network) {
-        ESP_LOGE(TAG, "Audio codec or network not available");
+    if (!network) {
+        ESP_LOGE(TAG, "Network not available");
         return false;
     }
 
@@ -131,7 +130,7 @@ void Mp3MusicPlayer::ConfigureHttpHeaders(Http* http, const std::string& url) {
     http->SetHeader("Referer", url.c_str());
 }
 
-bool Mp3MusicPlayer::ReadInitialBuffer(Http* http, std::vector<uint8_t>& mp3_buffer,
+bool Mp3MusicPlayer::ReadInitialBuffer(Http*http, std::vector<uint8_t>& mp3_buffer,
                                        size_t& mp3_data_size) {
     int initial_read = http->Read(reinterpret_cast<char*>(mp3_buffer.data()), BUFFER_SIZE);
     if (initial_read <= 0) {
@@ -207,12 +206,12 @@ bool Mp3MusicPlayer::RefillBuffer(Http* http, std::vector<uint8_t>& mp3_buffer,
     return true;
 }
 
-void Mp3MusicPlayer::ConvertPcmIfNeeded(AudioCodec* audio_codec, const MP3FrameInfo& frame_info,
+void Mp3MusicPlayer::ConvertPcmIfNeeded( const MP3FrameInfo& frame_info,
                                         const std::vector<int16_t>& pcm_buffer,
                                         std::vector<int16_t>& output_pcm, int& output_samples,
                                         int& output_channels) {
-    int codec_output_rate = audio_codec->output_sample_rate();
-    int codec_output_channels = audio_codec->output_channels();
+    int codec_output_rate = audio_codec_->output_sample_rate();
+    int codec_output_channels = audio_codec_->output_channels();
     int input_rate = frame_info.samprate;
     int input_channels = frame_info.nChans;
     int input_frames = frame_info.outputSamps / input_channels;
@@ -282,7 +281,7 @@ void Mp3MusicPlayer::ConvertPcmIfNeeded(AudioCodec* audio_codec, const MP3FrameI
     }
 }
 
-bool Mp3MusicPlayer::DecodeAndPlayFrame(AudioCodec* audio_codec, HMP3Decoder decoder,
+bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder,
                                         std::vector<uint8_t>& mp3_buffer, size_t& mp3_data_offset,
                                         size_t& mp3_data_size, std::vector<int16_t>& pcm_buffer,
                                         int& consecutive_skip_count) {
@@ -347,23 +346,23 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(AudioCodec* audio_codec, HMP3Decoder dec
         return true;
     }
 
-    int codec_output_rate = audio_codec->output_sample_rate();
+    int codec_output_rate = audio_codec_->output_sample_rate();
     int output_samples = frame_info.outputSamps;
     int output_channels = frame_info.nChans;
     std::vector<int16_t> output_pcm;
 
-    ConvertPcmIfNeeded(audio_codec, frame_info, pcm_buffer, output_pcm, output_samples,
+    ConvertPcmIfNeeded(frame_info, pcm_buffer, output_pcm, output_samples,
                        output_channels);
 
-    if (false == audio_codec->output_enabled()) {
-        audio_codec->EnableOutput(true);
+    if (false == audio_codec_->output_enabled()) {
+        audio_codec_->EnableOutput(true);
     }
 
     if (output_samples > 0) {
         if (output_pcm.empty()) {
-            audio_codec->OutputData(pcm_buffer.data(), output_samples);
+            audio_codec_->OutputData(pcm_buffer.data(), output_samples);
         } else {
-            audio_codec->OutputData(output_pcm.data(), output_samples);
+            audio_codec_->OutputData(output_pcm.data(), output_samples);
         }
     }
 
@@ -377,27 +376,26 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(AudioCodec* audio_codec, HMP3Decoder dec
 }
 
 void Mp3MusicPlayer::PlayInternal(const Music& music) {
-    AudioCodec* audio_codec = nullptr;
     NetworkInterface* network = nullptr;
     std::string final_url;
     std::unique_ptr<Http> http;
 
-    if (!PreparePlayback(music, audio_codec, network, final_url, http)) {
+    if (!PreparePlayback(music,  network, final_url, http)) {
         return;
     }
 
     auto& app = Application::GetInstance();
     auto& audio_service = app.GetAudioService();
     ESP_LOGI(TAG, "Starting MP3(%s) playback...", music.name.c_str());
-    audio_codec->SetOutputVolume(std::max(30, audio_codec->output_volume()));
-    audio_codec->EnableOutput(true);
+    audio_codec_->SetOutputVolume(std::max(30, audio_codec_->output_volume()));
+    audio_codec_->EnableOutput(true);   
 
     std::vector<uint8_t> mp3_buffer(BUFFER_SIZE);
     std::vector<int16_t> pcm_buffer(PCM_BUFFER_SIZE / 2);
     auto decoder = MP3InitDecoder();
     if (!decoder) {
         ESP_LOGE(TAG, "Failed to initialize MP3 decoder");
-        audio_codec->EnableOutput(false);
+        audio_codec_->EnableOutput(false);
         http->Close();
         return;
     }
@@ -409,7 +407,7 @@ void Mp3MusicPlayer::PlayInternal(const Music& music) {
 
     if (!ReadInitialBuffer(http.get(), mp3_buffer, mp3_data_size)) {
         MP3FreeDecoder(decoder);
-        audio_codec->EnableOutput(false);
+        audio_codec_->EnableOutput(false);
         http->Close();
         return;
     }
@@ -467,13 +465,13 @@ void Mp3MusicPlayer::PlayInternal(const Music& music) {
             continue;
         }
         audio_service.UpdateLastOutputTime();
-        if (!DecodeAndPlayFrame(audio_codec, decoder, mp3_buffer, mp3_data_offset, mp3_data_size,
+        if (!DecodeAndPlayFrame(decoder, mp3_buffer, mp3_data_offset, mp3_data_size,
                                 pcm_buffer, consecutive_skip_count)) {
             break;
         }
     }
     MP3FreeDecoder(decoder);
-    audio_codec->EnableOutput(false);
+    audio_codec_->EnableOutput(false);
     http->Close();
     ESP_LOGI(TAG, "Finished playing MP3(%s)", music.name.c_str());
 }

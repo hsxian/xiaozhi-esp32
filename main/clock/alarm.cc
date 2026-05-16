@@ -36,15 +36,15 @@ Alarm::Alarm(const std::string& alarm_id, const std::string& alarm_name, int h, 
           }
 
 // 转换为JSON字符串
-std::string Alarm::toJson() const {
+std::string Alarm::ToJson() const {
     cJSON* root = cJSON_CreateObject();
-    toJson(root);
+    ToJson(root);
     auto json_str = cJSON_Print(root);
     cJSON_Delete(root);
     return json_str;
 }
 
-void Alarm::toJson(cJSON* root) const {
+void Alarm::ToJson(cJSON* root) const {
     cJSON_AddStringToObject(root, "id", id.c_str());
     cJSON_AddStringToObject(root, "name", name.c_str());
     cJSON_AddNumberToObject(root, "hour", hour);
@@ -59,7 +59,7 @@ void Alarm::toJson(cJSON* root) const {
 }
 
 // 从JSON字符串解析
-bool Alarm::fromJson(const std::string& json) {
+bool Alarm::FromJson(const std::string& json) {
     cJSON* root = cJSON_Parse(json.c_str());
     if (root == NULL) {
         ESP_LOGE(__func__, "Failed to parse JSON: %s", cJSON_GetErrorPtr());
@@ -108,11 +108,11 @@ time_t Alarm::toTime(const time_t& now) const {
     return alarm_s;
 }
 
-std::string Alarm::toJsonArray(std::vector<Alarm>& alarms) {
+std::string Alarm::ToJsonArray(std::vector<Alarm>& alarms) {
     cJSON* array = cJSON_CreateArray();
     for (const auto& alarm : alarms) {
         cJSON* item = cJSON_CreateObject();
-        alarm.toJson(item);
+        alarm.ToJson(item);
         cJSON_AddItemToArray(array, item);
     }
     auto json_str = cJSON_Print(array);

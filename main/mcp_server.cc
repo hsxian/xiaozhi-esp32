@@ -19,6 +19,7 @@
 #include "lvgl_display.h"
 
 #include "clock/alarm_manager.h"
+#include "media/music/music_manager.h"
 
 #define TAG "MCP"
 
@@ -81,6 +82,7 @@ void McpServer::AddCommonTools() {
 
     std::vector<McpTool*> tools;
     AlarmManager::GetInstance().GenerateMcpServerTools(tools);
+    MusicManager::GetInstance().GenerateMcpServerTools(tools);
     for (auto tool : tools) {
         AddTool(tool);
     }

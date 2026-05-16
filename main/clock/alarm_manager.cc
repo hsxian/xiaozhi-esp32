@@ -92,7 +92,7 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                         properties["repeat_days"].value<int>());
 
             AddAlarm(alarm);
-            return alarm.toJson();
+            return alarm.ToJson();
         });
     tools.push_back(tool);
     tool = new McpTool(
@@ -105,7 +105,7 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
             std::string name = properties["name"].value<std::string>();
             std::vector<Alarm> alarms;
             if (Alarm::findByName(alarms_, name, alarms)) {
-                return Alarm::toJsonArray(alarms);
+                return Alarm::ToJsonArray(alarms);
             }
             return "";
         });
@@ -123,7 +123,7 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                 for (const auto& alarm : alarms) {
                     RemoveAlarm(alarm.id);
                 }
-                return Alarm::toJsonArray(alarms);
+                return Alarm::ToJsonArray(alarms);
             }
             return "";         
         });
@@ -165,7 +165,7 @@ void AlarmManager::LoadAlarms() {
         // 解析闹钟配置
         Alarm alarm;
         auto json = std::string(value);
-        if (!alarm.fromJson(json)) {
+        if (!alarm.FromJson(json)) {
             continue;
         }
         alarms_.push_back(alarm);
@@ -211,7 +211,7 @@ void AlarmManager::SaveAlarms() {
     for (size_t i = 0; i < save_alarms.size(); i++) {
         const Alarm& alarm = save_alarms[i];
         char key[32];
-        auto json = alarm.toJson();
+        auto json = alarm.ToJson();
         auto value = json.c_str();
 
         snprintf(key, sizeof(key), "alarm_%d", (int)i);
@@ -227,6 +227,8 @@ void AlarmManager::SaveAlarms() {
     }
 
     nvs_close(nvs_handle);
+
+    ESP_LOGI(TAG, "Saved %d alarms to NVS %s", save_alarms.size(), RECORD_FILE_NAME);
 }
 
 void AlarmManager::LoadHolidays() {
@@ -239,7 +241,8 @@ void AlarmManager::LoadHolidays() {
     int current_year = tm->tm_year + 1900;
 
     // 网络获取节假日配置
-    std::string url = "https://api.jiejiariapi.com/v1/holidays/" + std::to_string(current_year);
+    std::string url =
+        "https://api.jiejiariapi.com/v1/holidays/" + std::to_string(std::max(current_year, 2008));
     RestfulClient restful_client;
     std::string response = restful_client.Get(url);
     if (response.empty()) {
@@ -482,6 +485,7 @@ bool AlarmManager::IsHoliday(int month, int day, int weekday) const {
         return weekday == 0 || weekday == 6;
     }
     for (const auto& holiday : holidays_) {
+        ESP_LOGI(TAG, "Holiday: %s, %02d-%02d, %d", holiday.name.c_str(), holiday.month, holiday.day, holiday.is_offday);
         if (holiday.month == month && holiday.day == day && holiday.is_offday) {
             return true;
         }
@@ -643,7 +647,7 @@ void AlarmManager::CallAlarmCallback(const Alarm& alarm) {
     if (alarm_callback_) {
         alarm_callback_(alarm);
     }
-    app.AppendEventToGroup(MAIN_EVENT_ARARM_CLOCK_RINGING);
+    app.AppendEventToGroup(MAIN_EVENT_ALARM_CLOCK_RINGING);
 }
 
 void AlarmManager::CallAlarmStopCallback(const Alarm& alarm) {
@@ -658,7 +662,7 @@ void AlarmManager::CallAlarmStopCallback(const Alarm& alarm) {
     if (alarm_stop_callback_) {
         alarm_stop_callback_(alarm);
     }
-    app.ClearEventFromGroup(MAIN_EVENT_ARARM_CLOCK_RINGING);
+    app.ClearEventFromGroup(MAIN_EVENT_ALARM_CLOCK_RINGING);
 }
 
 bool AlarmManager::IsRinging() const { return is_ringing_; }

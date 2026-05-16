@@ -34,7 +34,7 @@
 #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
 #define MAIN_EVENT_PLAYBACK_DRAINED     (1 << 13)
 
-#define MAIN_EVENT_ARARM_CLOCK_RINGING (1 << 13)
+#define MAIN_EVENT_ALARM_CLOCK_RINGING (1 << 13)
 
 enum AecMode {
     kAecOff,

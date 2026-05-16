@@ -17,9 +17,9 @@
 #include <arpa/inet.h>
 #include <font_awesome.h>
 
-#include "clock/alarm_manager.h"
 #include "clock/alarm_event_config.h"
-
+#include "clock/alarm_manager.h"
+#include "media/music/mp3_music_player.h"
 #define TAG "Application"
 
 
@@ -185,7 +185,7 @@ void Application::Run() {
         MAIN_EVENT_STOP_LISTENING |
         MAIN_EVENT_ACTIVATION_DONE |
         MAIN_EVENT_STATE_CHANGED |
-        MAIN_EVENT_ARARM_CLOCK_RINGING
+        MAIN_EVENT_ALARM_CLOCK_RINGING
         ;
 
     while (true) {
@@ -263,7 +263,7 @@ void Application::Run() {
             }
         }
 
-        if (bits & MAIN_EVENT_ARARM_CLOCK_RINGING) {
+        if (bits & MAIN_EVENT_ALARM_CLOCK_RINGING) {
             AlarmEventConfig::GetInstance().HandleAlarmRingingEvent(aborted_, protocol_);
         }
     }
@@ -292,8 +292,6 @@ void Application::HandleNetworkConnectedEvent() {
     // Update the status bar immediately to show the network state
     auto display = Board::GetInstance().GetDisplay();
     display->UpdateStatusBar(true);
-
-    AlarmManager::GetInstance().LoadHolidays();
 }
 
 void Application::HandleNetworkDisconnectedEvent() {
@@ -333,6 +331,13 @@ void Application::HandleActivationDoneEvent() {
     });
 }
 
+void test (){
+    Music music;
+    music.name = "夜曲";
+    music.url = "http://music.163.com/song/media/outer/url?id=447925558.mp3";
+    auto mp = new Mp3MusicPlayer();
+    mp->Play(music);
+}
 void Application::ActivationTask() {
     // Create OTA object for activation process
     ota_ = std::make_unique<Ota>();
@@ -345,6 +350,8 @@ void Application::ActivationTask() {
 
     // Initialize the protocol
     InitializeProtocol();
+
+    AlarmManager::GetInstance().LoadHolidays();
 
     // Signal completion to main loop
     xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);

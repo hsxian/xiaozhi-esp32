@@ -73,7 +73,7 @@ bool AlarmEventConfig::HandleAlarmRingingEvent(bool& aborted, std::unique_ptr<Pr
             app.PlaySound(Lang::Sounds::OGG_ALARM_RING);
         }
 
-        app.AppendEventToGroup(MAIN_EVENT_ARARM_CLOCK_RINGING);
+        app.AppendEventToGroup(MAIN_EVENT_ALARM_CLOCK_RINGING);
         to_clear_alarm_event = true;
 
 
@@ -83,7 +83,7 @@ bool AlarmEventConfig::HandleAlarmRingingEvent(bool& aborted, std::unique_ptr<Pr
 
     } else {
         if (to_clear_alarm_event) {
-            app.ClearEventFromGroup(MAIN_EVENT_ARARM_CLOCK_RINGING);
+            app.ClearEventFromGroup(MAIN_EVENT_ALARM_CLOCK_RINGING);
             to_clear_alarm_event = false;
         }
     }

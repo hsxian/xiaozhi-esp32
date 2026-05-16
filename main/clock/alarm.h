@@ -45,14 +45,14 @@ struct Alarm {
           int vol = 80, RepeatMode mode = RepeatMode::ONCE, int repeat_days = 0);
       
     // 转换为JSON字符串
-    std::string toJson() const;
-    void toJson(cJSON* root) const;
-    static std::string toJsonArray(std::vector<Alarm>& alarms);
+    std::string ToJson() const;
+    void ToJson(cJSON* root) const;
+    static std::string ToJsonArray(std::vector<Alarm>& alarms);
     static bool findByName(std::vector<Alarm>& alarms, const std::string& name,
                            std::vector<Alarm>& found_alarms);
 
     // 从JSON字符串解析
-    bool fromJson(const std::string& json);
+    bool FromJson(const std::string& json);
     time_t toTime(const time_t& now) const;
 };
 

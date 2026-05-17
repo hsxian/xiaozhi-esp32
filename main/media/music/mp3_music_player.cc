@@ -556,6 +556,7 @@ bool Mp3MusicPlayer::PreparePlayback(const Music& music) {
         ESP_LOGI(TAG, "Response headers: Content-Length=%s Transfer-Encoding=%s", cl.c_str(),
                  te.c_str());
     }
+    current_control_mode_ = MusicPlayer::PlayControlMode::kControlHandled;
     return true;
 }
 

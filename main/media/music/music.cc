@@ -3,6 +3,7 @@
 #include <vector>
 #include "cJSON.h"
 #include "esp_log.h"
+#include "../common/json_helper.h"
 
 #define TAG "Music"
 
@@ -35,14 +36,15 @@ bool Music::FromJson(const std::string& json) {
     return true;
 }
 void Music::FromJson(const cJSON* item) {
-    rid = cJSON_GetNumberValue(cJSON_GetObjectItem(item, "rid"));
-    pic = cJSON_GetStringValue(cJSON_GetObjectItem(item, "pic"));
-    vid = cJSON_GetStringValue(cJSON_GetObjectItem(item, "vid"));
-    name = cJSON_GetStringValue(cJSON_GetObjectItem(item, "name"));
-    artist = cJSON_GetStringValue(cJSON_GetObjectItem(item, "artist"));
-    album = cJSON_GetStringValue(cJSON_GetObjectItem(item, "album"));
-    lrc = cJSON_GetStringValue(cJSON_GetObjectItem(item, "lrc"));
-    url = cJSON_GetStringValue(cJSON_GetObjectItem(item, "url"));
+    JsonHelper json_helper;
+    json_helper.GetNumber(item, "rid", rid);
+    json_helper.GetString(item, "pic", pic);
+    json_helper.GetString(item, "vid", vid);
+    json_helper.GetString(item, "name", name);
+    json_helper.GetString(item, "artist", artist);
+    json_helper.GetString(item, "album", album);
+    json_helper.GetString(item, "lrc", lrc);
+    json_helper.GetString(item, "url", url);
 }
 
 void Music::FromJsonArray(cJSON* array, std::vector<Music>& musics) {

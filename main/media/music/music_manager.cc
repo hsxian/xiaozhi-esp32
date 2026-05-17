@@ -8,6 +8,7 @@
 #include "kw_music_resource.h"
 #include "mcp_server.h"
 #include "mp3_music_player.h"
+#include "media/restful_client.h"
 
 #define TAG "MusicManager"
 
@@ -36,34 +37,46 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
 
                                 KwMusicResource resource;
                                 music_search_list_.clear();
-                                if (!resource.Search(query, music_search_list_)) {
-                                    return "";
-                                }
-
-                                auto json = Music::ToJsonArray(music_search_list_);
-
-                                return json;
+                                RestfulClient restful_client;
+                                std::string keyword = restful_client.UrlEncode(query.keyword);
+                                auto parms = std::format("name={}&page={}&limit={}", keyword,
+                                                         query.page, query.page_size);
+                                auto search_result = resource.Search(parms);
+                                return search_result;
                             });
     tools.push_back(tool);
 
     // 播放音乐
     tool = new McpTool(
-        "self.music.play", "a tool to play music. You must provide the URL of the music to play.",
-        PropertyList({Property("searchResultOrMusicList", kPropertyTypeBoolean, true)}),
+        "self.music.play",
+        "a tool to play music by provide the json array(.eg "
+        "[{\"name\":\"music_name\",\"artist\":\"artist_name\",\"url\":\"music_url\"}]) of the "
+        "music to play.",
+        PropertyList({Property("musicList", kPropertyTypeString)}),
         [this](const PropertyList& properties) -> ReturnValue {
             // Implement play logic here
-            bool is_search_result_or_music_list =
-                properties["searchResultOrMusicList"].value<bool>();
+            auto music_list = properties["musicList"].value<std::string>();
+            music_search_list_.clear();
+            auto json = cJSON_Parse(music_list.c_str());
+            if (json == nullptr) {
+                auto error_ptr = cJSON_GetErrorPtr();
+                ESP_LOGE(TAG, "Failed to parse JSON: %s", error_ptr ? error_ptr : "Unknown error");
+                return "Failed to parse JSON";
+            }
+
+            
+            Music::FromJsonArray(json, music_search_list_); 
+            cJSON_Delete(json);
             if (music_player_ == nullptr) {
                 music_player_ = new Mp3MusicPlayer();
             }
-            auto musics = is_search_result_or_music_list ? music_search_list_ : music_list_;
+            auto musics = music_search_list_.empty() ? music_list_ : music_search_list_;
             if (!musics.empty()) {
                 music_player_->Play(musics);
-                return true;
+                return "Music playback started";
             }
             TryResleaseMusicPlayer();
-            return false;
+            return "Failed to play music";
         });
     tools.push_back(tool);
 
@@ -96,8 +109,15 @@ void MusicManager::TryResleaseMusicPlayer() {
     }
 }
 void MusicManager::HandleDeviceStateChange(const DeviceState& state) {
-    if (state != kDeviceStateIdle && music_player_ && music_player_->IsPlaying()) {
-        ESP_LOGI(TAG, "Device state changed to %d, pausing music playback", state);
+    if (!music_player_ || !music_player_->IsPlaying()) {
+        return;
+    }
+
+    if (state != kDeviceStateIdle) {
+        ESP_LOGI(TAG, "Device state changed to %d,try pausing music playback", state);
         music_player_->ChangePlayControlMode(MusicPlayer::PlayControlMode::kPause);
+    } else {
+        ESP_LOGI(TAG, "Device state changed to idle,try resuming music playback");
+        music_player_->ChangePlayControlMode(MusicPlayer::PlayControlMode::kResume);
     }
 }

@@ -7,77 +7,489 @@
 #include "audio_codec.h"
 #include "board.h"
 
-#define TAG "Mp3MusicPlayer"
-#define BUFFER_SIZE (4 * 1024)      // 4KB缓冲区
-#define PCM_BUFFER_SIZE (8 * 1024)  // PCM输出缓冲区（增大以适应解码输出）
-
 extern "C" {
 #include <mp3dec.h>
 }
 
-Mp3MusicPlayer::Mp3MusicPlayer() : audio_codec_(Board::GetInstance().GetAudioCodec()) {}
-Mp3MusicPlayer::~Mp3MusicPlayer() {}
+#define TAG "Mp3MusicPlayer"
+
+Mp3MusicPlayer::Mp3MusicPlayer() : audio_codec_(Board::GetInstance().GetAudioCodec()) {
+    // 创建MP3数据队列
+    mp3_queue_ = xQueueCreate(QUEUE_SIZE, sizeof(Mp3DataChunk));
+    if (!mp3_queue_) {
+        ESP_LOGE(TAG, "Failed to create MP3 queue");
+    }
+}
+
+Mp3MusicPlayer::~Mp3MusicPlayer() {
+    CleanupResources();
+    if (mp3_queue_) {
+        vQueueDelete(mp3_queue_);
+    }
+}
 
 bool Mp3MusicPlayer::Play(const Music& music) {
+    std::vector<Music> music_list = {music};
+
+    Play(music_list);
+    return true;
+}
+
+void Mp3MusicPlayer::Play(const std::vector<Music>& music_list) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (IsPlaying()) {
         ESP_LOGW(TAG, "Already playing, stop current first");
-        return false;
+        return;
     }
-    current_music_list_.push_back(music);
+
+   
+    current_music_list_ = music_list;
     current_control_mode_ = MusicPlayer::PlayControlMode::kUnknown;
     is_playing_ = true;
+    current_track_index_ = 0;
 
-    // 创建播放任务
-    xTaskCreate(PlayTask, "mp3_play_task", 8192, this, 15, nullptr);
+    // 创建下载线程和解码播放线程
+    xTaskCreate(DownloadTask, "mp3_download_task", 8192, this, 2, &download_task_handle_);
+    xTaskCreate(DecodePlayTask, "mp3_decode_task", 8192, this, 5, &decode_task_handle_);
 
     ESP_LOGI(TAG, "Started playing MP3 %d tracks", current_music_list_.size());
-    return true;
 }
 
-void Mp3MusicPlayer::PlayTask(void* arg) {
+// 下载线程
+void Mp3MusicPlayer::DownloadTask(void* arg) {
     auto* player = static_cast<Mp3MusicPlayer*>(arg);
+    player->DownloadLoop();
+    vTaskDelete(nullptr);
+}
 
-    while (player->IsNeedWaitPalySattus()) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-    int total_tracks = player->current_music_list_.size();
-    for (int track_index = 0; track_index >= 0 && track_index < total_tracks; track_index++) {
-        const auto& music = player->current_music_list_[track_index];
-        if (player->current_control_mode_ == MusicPlayer::PlayControlMode::kStop) {
-            ESP_LOGI(TAG, "Stop requested, exiting play loop");
-            player->current_control_mode_ = MusicPlayer::PlayControlMode::kControlHandled;
+void Mp3MusicPlayer::DownloadLoop() {
+    while (is_playing_) {
+        // 等待播放状态
+        while (IsNeedWaitPalySattus()) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+
+        // 检查曲目索引
+        if (current_track_index_ < 0 ||
+            current_track_index_ >= static_cast<int>(current_music_list_.size())) {
+            ESP_LOGI(TAG, "No more tracks to download");
             break;
-        } else if (player->current_control_mode_ == MusicPlayer::PlayControlMode::kNext) {
-            player->current_control_mode_ = MusicPlayer::PlayControlMode::kControlHandled;
-            ESP_LOGI(TAG, "Next requested, skipping to next track");
-            continue;
-        } else if (player->current_control_mode_ == MusicPlayer::PlayControlMode::kPrevious) {
-            player->current_control_mode_ = MusicPlayer::PlayControlMode::kControlHandled;
-            ESP_LOGI(TAG, "Previous requested, skipping to previous track");
-            track_index = std::max(-1, track_index - 2);  // -2因为循环会加1
+        }
+
+        const auto& music = current_music_list_[current_track_index_];
+        ESP_LOGI(TAG, "Starting download for track %d/%d: %s", 1 + current_track_index_,
+                 static_cast<int>(current_music_list_.size()), music.name.c_str());
+
+        // 准备播放（建立HTTP连接）
+        if (!PreparePlayback(music)) {
+            // 发送错误信号
+            Mp3DataChunk error_chunk;
+            error_chunk.is_error = true;
+            xQueueSend(mp3_queue_, &error_chunk, portMAX_DELAY);
             continue;
         }
-        player->current_control_mode_ = MusicPlayer::PlayControlMode::kControlHandled;
-        ESP_LOGI(TAG, "Playing track %d/%d: %s %s from %s", track_index, total_tracks,
-                 music.artist.c_str(), music.name.c_str(), music.url.c_str());
-        player->PlayInternal(music);
+
+        current_control_mode_ = MusicPlayer::PlayControlMode::kControlHandled;
+
+        // 开始流式下载
+        is_downloading_ = true;
+        std::vector<uint8_t> buffer(BUFFER_SIZE);
+        bool connection_closed = false;
+
+        while (is_playing_ && !connection_closed) {
+            // 检查控制命令
+            if (current_control_mode_ == MusicPlayer::PlayControlMode::kStop) {
+                ESP_LOGI(TAG, "Download stopped by user");
+                break;
+            } else if (current_control_mode_ == MusicPlayer::PlayControlMode::kNext ||
+                       current_control_mode_ == MusicPlayer::PlayControlMode::kPrevious) {
+                ESP_LOGI(TAG, "Track change requested, stopping download");
+                break;
+            }
+
+            if (is_paused_) {
+                // 暂停时不要消耗流数据，否则会丢弃音频并导致播放失败
+                vTaskDelay(pdMS_TO_TICKS(100));
+                continue;
+            }
+
+            // 读取数据
+            int bytes_read = 0;
+            {
+                std::lock_guard<std::mutex> lock(http_mutex_);
+                if (http_) {
+                    bytes_read = http_->Read(reinterpret_cast<char*>(buffer.data()), BUFFER_SIZE);
+                }
+            }
+
+            if (bytes_read <= 0) {
+                int last_err = 0;
+                std::string conn_hdr;
+                size_t content_length = 0;
+                std::string accept_ranges;
+                {
+                    std::lock_guard<std::mutex> lock(http_mutex_);
+                    if (http_) {
+                        last_err = http_->GetLastError();
+                        conn_hdr = http_->GetResponseHeader("Connection");
+                        content_length = http_->GetBodyLength();
+                        accept_ranges = http_->GetResponseHeader("Accept-Ranges");
+                    }
+                }
+                ESP_LOGI(TAG,
+                         "End of stream or connection closed (bytes_read=%d, last_err=0x%x, "
+                         "Connection=%s, received=%u, content_length=%u, accept_ranges=%s)",
+                         bytes_read, last_err, conn_hdr.c_str(), (unsigned)download_bytes_received_,
+                         (unsigned)content_length, accept_ranges.c_str());
+
+                // 尝试断点续传（如果服务器支持且未下载完整）
+                if (content_length > 0 && download_bytes_received_ < content_length &&
+                    accept_ranges.find("bytes") != std::string::npos) {
+                    const int max_retries = 3;
+                    int attempt = 0;
+                    bool resumed = false;
+                    for (; attempt < max_retries && is_playing_; ++attempt) {
+                        ESP_LOGI(TAG, "Attempting resume download, attempt %d, offset=%u",
+                                 attempt + 1, (unsigned)download_bytes_received_);
+                        // 关闭旧连接
+                        {
+                            std::lock_guard<std::mutex> lock(http_mutex_);
+                            if (http_) {
+                                http_->Close();
+                                http_.reset();
+                            }
+                        }
+
+                        vTaskDelay(pdMS_TO_TICKS(200));
+
+                        // 建立新连接并设置 Range 头
+                        {
+                            std::lock_guard<std::mutex> lock(http_mutex_);
+                            http_ = network_->CreateHttp();
+                            if (!http_) {
+                                ESP_LOGE(TAG, "Failed to create HTTP for resume");
+                                continue;
+                            }
+                            ConfigureHttpHeaders(http_.get(), current_url_);
+                            http_->SetHeader(
+                                "Range", "bytes=" + std::to_string(download_bytes_received_) + "-");
+                            if (!http_->Open("GET", current_url_)) {
+                                ESP_LOGW(TAG, "Resume Open failed");
+                                http_->Close();
+                                http_.reset();
+                                continue;
+                            }
+                        }
+
+                        // 如果成功打开，继续读取
+                        ESP_LOGI(TAG, "Resume connection opened");
+                        resumed = true;
+                        break;
+                    }
+
+                    if (resumed) {
+                        // 继续循环读取
+                        continue;
+                    }
+                }
+
+                connection_closed = true;
+                break;
+            }
+
+            // 发送数据到队列
+            Mp3DataChunk chunk;
+            chunk.data = new uint8_t[bytes_read];
+            memcpy(chunk.data, buffer.data(), bytes_read);
+            chunk.size = bytes_read;
+            chunk.is_eos = false;
+            chunk.is_error = false;
+
+            UBaseType_t queue_count = uxQueueMessagesWaiting(mp3_queue_);
+            
+            // 智能流量控制：根据队列深度动态调整等待时间
+            // 当队列深度超过高水位时，主动等待解码线程消费
+            if (queue_count >= HIGH_WATER_MARK) {
+                // 等待时间与队列深度成正比，指数增长
+                int wait_ms = (queue_count - HIGH_WATER_MARK + 1) * 100;
+                ESP_LOGD(TAG, "Queue deep (%d/%d), throttling download for %dms", queue_count, QUEUE_SIZE, wait_ms);
+                vTaskDelay(pdMS_TO_TICKS(wait_ms));
+                
+                // 重新检查队列深度
+                queue_count = uxQueueMessagesWaiting(mp3_queue_);
+            }
+
+            // 当队列接近满时，使用较长的超时时间
+            TickType_t timeout;
+            if (queue_count >= CRITICAL_WATER_MARK) {
+                // 接近满队列时，等待更长时间让解码线程消费
+                timeout = pdMS_TO_TICKS(2000);
+            } else if (queue_count >= HIGH_WATER_MARK) {
+                timeout = pdMS_TO_TICKS(1000);
+            } else {
+                timeout = pdMS_TO_TICKS(100);
+            }
+            
+            BaseType_t send_result = xQueueSend(mp3_queue_, &chunk, timeout);
+            if (send_result != pdPASS) {
+                // 队列仍然满，改为阻塞式等待（不丢包）
+                ESP_LOGW(TAG, "Queue full after %dms wait, blocking until space available", timeout / portTICK_PERIOD_MS);
+                // 使用 portMAX_DELAY 无限等待，直到队列有空间
+                if (xQueueSend(mp3_queue_, &chunk, portMAX_DELAY) != pdPASS) {
+                    // 理论上不会到达这里，除非队列被删除
+                    ESP_LOGE(TAG, "Failed to send chunk even with infinite wait!");
+                    delete[] chunk.data;
+                }
+            }
+
+            download_bytes_received_ += (size_t)bytes_read;
+            ESP_LOGD(TAG, "Downloaded %d bytes, total received %u, queue space available",
+                     bytes_read, (unsigned)download_bytes_received_);
+        }
+
+        // 发送EOS信号
+        Mp3DataChunk eos_chunk;
+        eos_chunk.is_eos = true;
+        xQueueSend(mp3_queue_, &eos_chunk, portMAX_DELAY);
+
+        // 关闭HTTP连接
+        {
+            std::lock_guard<std::mutex> lock(http_mutex_);
+            if (http_) {
+                http_->Close();
+                http_.reset();
+            }
+        }
+        is_downloading_ = false;
+
+        // 检查是否需要继续下一首
+        if (current_control_mode_ == MusicPlayer::PlayControlMode::kNext) {
+            current_track_index_++;
+            current_control_mode_ = MusicPlayer::PlayControlMode::kControlHandled;
+        } else if (current_control_mode_ == MusicPlayer::PlayControlMode::kPrevious) {
+            current_track_index_ = std::max(-1, current_track_index_ - 2);
+            current_control_mode_ = MusicPlayer::PlayControlMode::kControlHandled;
+        } else if (current_control_mode_ == MusicPlayer::PlayControlMode::kStop) {
+            break;
+        } else {
+            // 正常结束，进入下一首
+            current_track_index_++;
+            current_control_mode_ = MusicPlayer::PlayControlMode::kControlHandled;
+        }
     }
-    player->current_control_mode_ = MusicPlayer::PlayControlMode::kUnknown;
-    player->is_playing_ = false;
+
+    ESP_LOGI(TAG, "Download task exiting");
+}
+
+// 解码播放线程
+void Mp3MusicPlayer::DecodePlayTask(void* arg) {
+    auto* player = static_cast<Mp3MusicPlayer*>(arg);
+    player->DecodePlayLoop();
     vTaskDelete(nullptr);
+}
+
+void Mp3MusicPlayer::DecodePlayLoop() {
+    auto& app = Application::GetInstance();
+    auto& audio_service = app.GetAudioService();
+
+    while (is_playing_) {
+        // 检查曲目索引
+        if (current_track_index_ < 0 ||
+            current_track_index_ >= static_cast<int>(current_music_list_.size())) {
+            ESP_LOGI(TAG, "No more tracks to play");
+            break;
+        }
+
+        const auto& music = current_music_list_[current_track_index_];
+        ESP_LOGI(TAG, "Playing track %d/%d: %s %s", 1 + current_track_index_,
+                 static_cast<int>(current_music_list_.size()), music.artist.c_str(),
+                 music.name.c_str());
+
+        audio_codec_->SetOutputVolume(std::max(30, audio_codec_->output_volume()));
+        audio_codec_->EnableOutput(true);
+
+        // 初始化解码器
+        auto decoder = MP3InitDecoder();
+        if (!decoder) {
+            ESP_LOGE(TAG, "Failed to initialize MP3 decoder");
+            audio_codec_->EnableOutput(false);
+            ESP_LOGI(TAG, "Decode: Waiting for data from queue...");
+            // 等待并处理EOS
+            Mp3DataChunk chunk;
+            while (xQueueReceive(mp3_queue_, &chunk, portMAX_DELAY) == pdPASS) {
+                if (chunk.data)
+                    delete[] chunk.data;
+                if (chunk.is_eos || chunk.is_error)
+                    break;
+            }
+            continue;
+        }
+
+        std::vector<uint8_t> mp3_buffer(BUFFER_SIZE * 2);
+        std::vector<int16_t> pcm_buffer(PCM_BUFFER_SIZE / 2);
+        size_t mp3_data_offset = 0;
+        size_t mp3_data_size = 0;
+        int consecutive_skip_count = 0;
+        bool track_complete = false;
+        bool track_error = false;
+
+
+        ESP_LOGI(TAG, "Decode: Entering main decode loop");
+        while (is_playing_ && !track_complete && !track_error) {
+            // 检查暂停
+            if (is_paused_) {
+                ESP_LOGI(TAG, "Paused, waiting for resume");
+                std::unique_lock<std::mutex> lock(mutex_);
+                pause_cv_.wait(lock, [this]() {
+                    return !is_paused_ ||
+                           current_control_mode_ == MusicPlayer::PlayControlMode::kStop;
+                });
+                ESP_LOGI(TAG, "Resumed or stopped");
+            }
+
+            // 检查控制命令
+            if (current_control_mode_ == MusicPlayer::PlayControlMode::kStop) {
+                ESP_LOGI(TAG, "Decode play stopped by user");
+                break;
+            }
+            if (current_control_mode_ == MusicPlayer::PlayControlMode::kNext ||
+                current_control_mode_ == MusicPlayer::PlayControlMode::kPrevious) {
+                ESP_LOGI(TAG, "Track change requested");
+                break;
+            }
+
+            // 从队列获取数据 - 使用较长超时时间确保能获取到数据
+            Mp3DataChunk chunk;
+            BaseType_t receive_result = xQueueReceive(mp3_queue_, &chunk, pdMS_TO_TICKS(500));
+            
+            if (receive_result == pdPASS) {
+                if (chunk.is_eos) {
+                    ESP_LOGI(TAG, "Received EOS signal");
+                    track_complete = true;
+                    continue;
+                }
+                if (chunk.is_error) {
+                    ESP_LOGE(TAG, "Received error signal");
+                    track_error = true;
+                    continue;
+                }
+
+                // 将数据添加到缓冲区。若数据已消费，需要先压缩剩余数据到缓冲区前端。
+                if (mp3_data_offset > 0) {
+                    if (mp3_data_size > 0) {
+                        memmove(mp3_buffer.data(), mp3_buffer.data() + mp3_data_offset,
+                                mp3_data_size);
+                    }
+                    mp3_data_offset = 0;
+                }
+
+                if (mp3_data_size + chunk.size > mp3_buffer.size()) {
+                    mp3_buffer.resize(mp3_data_size + chunk.size + BUFFER_SIZE);
+                }
+                memcpy(mp3_buffer.data() + mp3_data_size, chunk.data, chunk.size);
+                mp3_data_size += chunk.size;
+                delete[] chunk.data;
+
+                ESP_LOGD(TAG, "Received %d bytes, total buffered: %u", (int)chunk.size,
+                         (unsigned int)mp3_data_size);
+            } else {
+                // 队列超时，检查是否真的没有数据
+                UBaseType_t queue_count = uxQueueMessagesWaiting(mp3_queue_);
+                if (queue_count > 0) {
+                    ESP_LOGW(TAG, "Queue has %d items but receive timed out!", queue_count);
+                }
+                // 缓冲区数据不足时继续等待，不要跳过
+                if (mp3_data_size < 512) {
+                    ESP_LOGD(TAG, "Waiting for more data, buffered: %u", (unsigned int)mp3_data_size);
+                    continue;
+                }
+            }
+
+            audio_service.UpdateLastOutputTime();
+            if (false == audio_codec_->output_enabled()) {
+                audio_codec_->EnableOutput(true);
+            }
+            
+            // 解码播放循环：持续解码直到缓冲区数据不足
+            while (mp3_data_size >= 512 && is_playing_ && !is_paused_) {
+                if (!DecodeAndPlayFrame(decoder, mp3_buffer, mp3_data_offset, mp3_data_size,
+                                        pcm_buffer, consecutive_skip_count)) {
+                    ESP_LOGW(TAG, "Decode failed, skipping");
+                    break;
+                }
+                
+                // 解码过程中尝试预取下一批数据，提高效率
+                Mp3DataChunk next_chunk;
+                if (xQueueReceive(mp3_queue_, &next_chunk, 0) == pdPASS) {
+                    if (next_chunk.is_eos) {
+                        ESP_LOGI(TAG, "Received EOS during decode");
+                        track_complete = true;
+                        break;
+                    }
+                    if (next_chunk.is_error) {
+                        ESP_LOGE(TAG, "Received error during decode");
+                        track_error = true;
+                        break;
+                    }
+                    // 压缩缓冲区并添加新数据
+                    if (mp3_data_offset > 0) {
+                        if (mp3_data_size > 0) {
+                            memmove(mp3_buffer.data(), mp3_buffer.data() + mp3_data_offset,
+                                    mp3_data_size);
+                        }
+                        mp3_data_offset = 0;
+                    }
+                    if (mp3_data_size + next_chunk.size > mp3_buffer.size()) {
+                        mp3_buffer.resize(mp3_data_size + next_chunk.size + BUFFER_SIZE);
+                    }
+                    memcpy(mp3_buffer.data() + mp3_data_size, next_chunk.data, next_chunk.size);
+                    mp3_data_size += next_chunk.size;
+                    delete[] next_chunk.data;
+                    ESP_LOGD(TAG, "Prefetched %d bytes during decode, total buffered: %u", 
+                             (int)next_chunk.size, (unsigned int)mp3_data_size);
+                }
+            }
+        }
+
+        // 清理解码器
+        MP3FreeDecoder(decoder);
+        audio_codec_->EnableOutput(false);
+
+        // 清空队列中剩余数据
+        Mp3DataChunk chunk;
+        while (xQueueReceive(mp3_queue_, &chunk, 0) == pdPASS) {
+            if (chunk.data)
+                delete[] chunk.data;
+            if (chunk.is_eos)
+                break;
+        }
+
+        // 更新曲目索引
+        if (current_control_mode_ == MusicPlayer::PlayControlMode::kStop) {
+            break;
+        } else if (current_control_mode_ == MusicPlayer::PlayControlMode::kNext) {
+            // 由下载线程处理
+        } else if (current_control_mode_ == MusicPlayer::PlayControlMode::kPrevious) {
+            // 由下载线程处理
+        } else {
+            // 正常结束，进入下一首
+            current_track_index_++;
+        }
+    }
+
+    is_playing_ = false;
+    current_control_mode_ = MusicPlayer::PlayControlMode::kUnknown;
+    ESP_LOGI(TAG, "Decode play task exiting");
 }
 
 bool Mp3MusicPlayer::IsPlaying() const { return is_playing_; }
 
-bool Mp3MusicPlayer::PreparePlayback(const Music& music, 
-                                     NetworkInterface*& network, std::string& final_url,
-                                     std::unique_ptr<Http>& http) {
+bool Mp3MusicPlayer::PreparePlayback(const Music& music) {
     auto& board = Board::GetInstance();
-    network = board.GetNetwork();
+    network_ = board.GetNetwork();
 
-    if (!network) {
+    if (!network_) {
         ESP_LOGE(TAG, "Network not available");
         return false;
     }
@@ -95,27 +507,41 @@ bool Mp3MusicPlayer::PreparePlayback(const Music& music,
     if (!redirect_url.empty()) {
         url = redirect_url;
     }
-    ESP_LOGI(TAG, "Final URL: %s (redirected from: %s)", url.c_str(), redirect_url.c_str());
+    ESP_LOGI(TAG, "Final URL: %s", url.c_str());
 
-    http = network->CreateHttp();
-    if (!http || !http->Open("GET", url)) {
-        ESP_LOGE(TAG, "Failed to open HTTP connection for: %s", url.c_str());
-        if (http) {
-            http->Close();
-        }
+    std::lock_guard<std::mutex> lock(http_mutex_);
+    http_ = network_->CreateHttp();
+    current_url_ = url;
+    download_bytes_received_ = 0;
+    if (!http_) {
+        ESP_LOGE(TAG, "Failed to create HTTP client for: %s", url.c_str());
         return false;
     }
 
-    ConfigureHttpHeaders(http.get(), url);
+    ConfigureHttpHeaders(http_.get(), url);
+    if (!http_->Open("GET", url)) {
+        ESP_LOGE(TAG, "Failed to open HTTP connection for: %s", url.c_str());
+        http_->Close();
+        http_.reset();
+        return false;
+    }
 
-    int status_code = http->GetStatusCode();
+    int status_code = http_->GetStatusCode();
     if (status_code != 200) {
         ESP_LOGE(TAG, "HTTP request failed, status code: %d", status_code);
-        http->Close();
+        http_->Close();
+        http_.reset();
         return false;
     }
 
-    final_url = std::move(url);
+    ESP_LOGI(TAG, "HTTP connection established successfully");
+    // 记录部分响应头，便于排查服务器是否立即关闭连接或使用 chunked 编码
+    {
+        std::string cl = http_->GetResponseHeader("Content-Length");
+        std::string te = http_->GetResponseHeader("Transfer-Encoding");
+        ESP_LOGI(TAG, "Response headers: Content-Length=%s Transfer-Encoding=%s", cl.c_str(),
+                 te.c_str());
+    }
     return true;
 }
 
@@ -128,21 +554,6 @@ void Mp3MusicPlayer::ConfigureHttpHeaders(Http* http, const std::string& url) {
     http->SetHeader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
     http->SetHeader("Accept-Encoding", "identity");  // 不压缩，直接传输
     http->SetHeader("Referer", url.c_str());
-}
-
-bool Mp3MusicPlayer::ReadInitialBuffer(Http*http, std::vector<uint8_t>& mp3_buffer,
-                                       size_t& mp3_data_size) {
-    int initial_read = http->Read(reinterpret_cast<char*>(mp3_buffer.data()), BUFFER_SIZE);
-    if (initial_read <= 0) {
-        ESP_LOGE(TAG, "Failed to read initial data");
-        return false;
-    }
-    mp3_data_size = initial_read;
-    ESP_LOGI(TAG, "Initial read: %d bytes, buffer size: %d", initial_read, BUFFER_SIZE);
-    ESP_LOGI(TAG, "Initial data first 8 bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
-             mp3_buffer[0], mp3_buffer[1], mp3_buffer[2], mp3_buffer[3], mp3_buffer[4],
-             mp3_buffer[5], mp3_buffer[6], mp3_buffer[7]);
-    return true;
 }
 
 void Mp3MusicPlayer::SkipId3Tag(std::vector<uint8_t>& mp3_buffer, size_t& mp3_data_size,
@@ -172,41 +583,43 @@ void Mp3MusicPlayer::SkipId3Tag(std::vector<uint8_t>& mp3_buffer, size_t& mp3_da
     }
 }
 
-bool Mp3MusicPlayer::RefillBuffer(Http* http, std::vector<uint8_t>& mp3_buffer,
-                                  size_t& mp3_data_offset, size_t& mp3_data_size) {
-    if (mp3_data_size >= BUFFER_SIZE / 2) {
-        return true;
+void Mp3MusicPlayer::CleanupResources() {
+    is_playing_ = false;
+    is_paused_ = false;
+    pause_cv_.notify_all();
+
+    // 删除任务
+    if (download_task_handle_) {
+        vTaskDelete(download_task_handle_);
+        download_task_handle_ = nullptr;
+    }
+    if (decode_task_handle_) {
+        vTaskDelete(decode_task_handle_);
+        decode_task_handle_ = nullptr;
     }
 
-    if (mp3_data_offset > 0 && mp3_data_size > 0) {
-        memmove(mp3_buffer.data(), mp3_buffer.data() + mp3_data_offset, mp3_data_size);
-    }
-    mp3_data_offset = 0;
-
-    int bytes_read = http->Read(reinterpret_cast<char*>(mp3_buffer.data() + mp3_data_size),
-                                BUFFER_SIZE - mp3_data_size);
-    if (bytes_read <= 0) {
-        ESP_LOGI(TAG, "End of stream or connection closed");
-        return false;
-    }
-
-    mp3_data_size += bytes_read;
-    ESP_LOGD(TAG, "Read %d bytes, total buffered: %u", bytes_read, (unsigned int)mp3_data_size);
-
-    int zero_count = 0;
-    for (int i = 0; i < bytes_read && i < 16; i++) {
-        if (mp3_buffer[mp3_data_size - bytes_read + i] == 0) {
-            zero_count++;
+    // 关闭HTTP连接
+    {
+        std::lock_guard<std::mutex> lock(http_mutex_);
+        if (http_) {
+            http_->Close();
+            http_.reset();
         }
     }
-    if (zero_count == 16 && bytes_read >= 16) {
-        ESP_LOGW(TAG, "Warning: Last read contains all zeros!");
+
+    // 清空队列
+    Mp3DataChunk chunk;
+    while (xQueueReceive(mp3_queue_, &chunk, 0) == pdPASS) {
+        if (chunk.data)
+            delete[] chunk.data;
     }
 
-    return true;
+    network_ = nullptr;
+    current_track_index_ = 0;
+    current_music_list_.clear();
 }
 
-void Mp3MusicPlayer::ConvertPcmIfNeeded( const MP3FrameInfo& frame_info,
+void Mp3MusicPlayer::ConvertPcmIfNeeded(const MP3FrameInfo& frame_info,
                                         const std::vector<int16_t>& pcm_buffer,
                                         std::vector<int16_t>& output_pcm, int& output_samples,
                                         int& output_channels) {
@@ -281,56 +694,80 @@ void Mp3MusicPlayer::ConvertPcmIfNeeded( const MP3FrameInfo& frame_info,
     }
 }
 
-bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder,
-                                        std::vector<uint8_t>& mp3_buffer, size_t& mp3_data_offset,
-                                        size_t& mp3_data_size, std::vector<int16_t>& pcm_buffer,
+bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t>& mp3_buffer,
+                                        size_t& mp3_data_offset, size_t& mp3_data_size,
+                                        std::vector<int16_t>& pcm_buffer,
                                         int& consecutive_skip_count) {
+    // 在每次从头开始解码时跳过ID3标签
+    if (mp3_data_offset == 0) {
+        SkipId3Tag(mp3_buffer, mp3_data_size, mp3_data_offset);
+    }
+
+    // 搜索有效帧头 - 每次失败后都重新搜索，避免卡在无效位置
+    int sync_offset = MP3FindSyncWord(mp3_buffer.data() + mp3_data_offset, (int)mp3_data_size);
+    if (sync_offset > 0) {
+        mp3_data_offset += (size_t)sync_offset;
+        mp3_data_size -= (size_t)sync_offset;
+        ESP_LOGI(TAG, "Found valid MP3 frame at offset %d, remaining: %u", sync_offset, (unsigned int)mp3_data_size);
+    } else if (sync_offset < 0 && mp3_data_size > 0) {
+        // 没有找到帧头，跳过一个字节
+        mp3_data_offset++;
+        mp3_data_size--;
+        consecutive_skip_count++;
+        if (consecutive_skip_count % 50 == 0) {
+            ESP_LOGW(TAG, "No valid frame found, skipping bytes (total skipped: %d)", consecutive_skip_count);
+        }
+        if (consecutive_skip_count >= MAX_CONSECUTIVE_SKIPS) {
+            ESP_LOGE(TAG,
+                     "Too many consecutive frame skips (%d), stopping playback of this track",
+                     consecutive_skip_count);
+            return false;
+        }
+        return true;
+    }
+
+    // MP3帧最小约为24字节（帧头4字节 + 最小数据），要求至少有128字节确保有完整帧
+    const int MIN_FRAME_SIZE = 128;
+    if (mp3_data_size < MIN_FRAME_SIZE) {
+        ESP_LOGD(TAG, "Not enough data to decode (size: %u, need: %d), waiting for more", 
+                 (unsigned int)mp3_data_size, MIN_FRAME_SIZE);
+        return true;
+    }
+
     unsigned char* pInData = const_cast<unsigned char*>(mp3_buffer.data() + mp3_data_offset);
     int nBytesLeft = mp3_data_size;
     int samples_decoded = MP3Decode(decoder, &pInData, &nBytesLeft, pcm_buffer.data(), 0);
 
     if (samples_decoded < 0) {
         if (samples_decoded == ERR_MP3_INDATA_UNDERFLOW) {
-            ESP_LOGI(TAG, "Need more data for MP3 decoding, current buffered: %u",
+            ESP_LOGD(TAG, "Need more data for MP3 decoding, current buffered: %u",
                      (unsigned int)mp3_data_size);
-            consecutive_skip_count = 0;  // 重置跳过计数
+            consecutive_skip_count = 0;
             return true;
         }
 
-        ESP_LOGW(TAG, "MP3Decode failed with error code: %d", samples_decoded);
-
-        /* Use library sync finder instead of ad-hoc checks to resync */
-        int sync = MP3FindSyncWord(mp3_buffer.data() + mp3_data_offset, (int)mp3_data_size);
-        if (sync >= 0) {
-            mp3_data_offset += (size_t)sync;
-            mp3_data_size -= (size_t)sync;
-            consecutive_skip_count = 0;  // 找到有效帧头，重置计数
-            ESP_LOGW(TAG, "Resynced, skipped %d bytes to find frame at offset %u", sync,
-                     (unsigned int)mp3_data_offset);
-        } else {
-            consecutive_skip_count++;
-            if (mp3_data_size > 0) {
-                mp3_data_offset++;
-                mp3_data_size--;
-            }
-
-            // 检查是否超过阈值
-            if (consecutive_skip_count % 20 == 0) {
-                // 每20次跳过打印一次
-                ESP_LOGW(TAG, "No valid frame found, skipping 1 byte (total: %d/%d)",
-                         consecutive_skip_count, MAX_CONSECUTIVE_SKIPS);
-            }
-            if (consecutive_skip_count >= MAX_CONSECUTIVE_SKIPS) {
-                ESP_LOGE(TAG,
-                         "Too many consecutive frame skips (%d), stopping playback of this track",
-                         consecutive_skip_count);
-                return false;  // 返回false停止播放
-            }
+        ESP_LOGW(TAG, "MP3Decode failed with error code: %d, skipping 1 byte", samples_decoded);
+        
+        // 解码失败，跳过一个字节并重新搜索
+        if (mp3_data_size > 0) {
+            mp3_data_offset++;
+            mp3_data_size--;
+        }
+        consecutive_skip_count++;
+        
+        if (consecutive_skip_count % 20 == 0) {
+            ESP_LOGW(TAG, "Decode failures accumulating (total: %d/%d)",
+                     consecutive_skip_count, MAX_CONSECUTIVE_SKIPS);
+        }
+        if (consecutive_skip_count >= MAX_CONSECUTIVE_SKIPS) {
+            ESP_LOGE(TAG,
+                     "Too many consecutive decode failures (%d), stopping playback of this track",
+                     consecutive_skip_count);
+            return false;
         }
         return true;
     }
 
-    // 成功解码，重置跳过计数
     consecutive_skip_count = 0;
 
     MP3FrameInfo frame_info;
@@ -341,8 +778,7 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder,
     ESP_LOGD(TAG, "Decoded %d samples, consumed %d bytes, remaining: %u", frame_info.outputSamps,
              bytes_consumed, (unsigned int)mp3_data_size);
 
-    if (frame_info.outputSamps <= 0 ||
-        current_control_mode_ == MusicPlayer::PlayControlMode::kStop) {
+    if (frame_info.outputSamps <= 0) {
         return true;
     }
 
@@ -351,12 +787,7 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder,
     int output_channels = frame_info.nChans;
     std::vector<int16_t> output_pcm;
 
-    ConvertPcmIfNeeded(frame_info, pcm_buffer, output_pcm, output_samples,
-                       output_channels);
-
-    if (false == audio_codec_->output_enabled()) {
-        audio_codec_->EnableOutput(true);
-    }
+    ConvertPcmIfNeeded(frame_info, pcm_buffer, output_pcm, output_samples, output_channels);
 
     if (output_samples > 0) {
         if (output_pcm.empty()) {
@@ -375,130 +806,49 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder,
     return true;
 }
 
-void Mp3MusicPlayer::PlayInternal(const Music& music) {
-    NetworkInterface* network = nullptr;
-    std::string final_url;
-    std::unique_ptr<Http> http;
-
-    if (!PreparePlayback(music,  network, final_url, http)) {
-        return;
-    }
-
-    auto& app = Application::GetInstance();
-    auto& audio_service = app.GetAudioService();
-    ESP_LOGI(TAG, "Starting MP3(%s) playback...", music.name.c_str());
-    audio_codec_->SetOutputVolume(std::max(30, audio_codec_->output_volume()));
-    audio_codec_->EnableOutput(true);   
-
-    std::vector<uint8_t> mp3_buffer(BUFFER_SIZE);
-    std::vector<int16_t> pcm_buffer(PCM_BUFFER_SIZE / 2);
-    auto decoder = MP3InitDecoder();
-    if (!decoder) {
-        ESP_LOGE(TAG, "Failed to initialize MP3 decoder");
-        audio_codec_->EnableOutput(false);
-        http->Close();
-        return;
-    }
-
-    ESP_LOGI(TAG, "MP3 decoder initialized successfully");
-
-    size_t mp3_data_offset = 0;
-    size_t mp3_data_size = 0;
-
-    if (!ReadInitialBuffer(http.get(), mp3_buffer, mp3_data_size)) {
-        MP3FreeDecoder(decoder);
-        audio_codec_->EnableOutput(false);
-        http->Close();
-        return;
-    }
-
-    SkipId3Tag(mp3_buffer, mp3_data_size, mp3_data_offset);
-
-    /* Search for first valid MP3 frame header after potential ID3 or other metadata */
-    int sync_offset = MP3FindSyncWord(mp3_buffer.data(), (int)mp3_data_size);
-    if (sync_offset >= 0) {
-        mp3_data_offset = (size_t)sync_offset;
-        mp3_data_size -= (size_t)sync_offset;
-        ESP_LOGI(TAG, "Found first valid MP3 frame at offset %d", sync_offset);
-    } else {
-        ESP_LOGW(TAG,
-                 "Warning: No valid MP3 frame found in initial buffer, first 8 bytes: %02X %02X "
-                 "%02X %02X %02X %02X %02X %02X",
-                 mp3_buffer[0], mp3_buffer[1], mp3_buffer[2], mp3_buffer[3], mp3_buffer[4],
-                 mp3_buffer[5], mp3_buffer[6], mp3_buffer[7]);
-    }
-
-    int consecutive_skip_count = 0;
-    while (true) {
-        // 检查暂停请求
-        if (current_control_mode_ == MusicPlayer::PlayControlMode::kPause) {
-            ESP_LOGI(TAG, "Pause requested, pausing playback");
-            current_control_mode_ = MusicPlayer::PlayControlMode::kControlHandled;
-
-            // 暂停循环：等待恢复或停止命令
-            while (true) {
-                if (current_control_mode_ == MusicPlayer::PlayControlMode::kResume) {
-                    ESP_LOGI(TAG, "Resume requested, resuming playback");
-                    current_control_mode_ = MusicPlayer::PlayControlMode::kControlHandled;
-                    break;  // 恢复播放
-                }
-                if (current_control_mode_ == MusicPlayer::PlayControlMode::kStop ||
-                    current_control_mode_ == MusicPlayer::PlayControlMode::kNext ||
-                    current_control_mode_ == MusicPlayer::PlayControlMode::kPrevious) {
-                    break;  // 退出暂停循环，继续处理其他命令
-                }
-                vTaskDelay(pdMS_TO_TICKS(100));  // 等待控制命令
-            }
-        }
-
-        if (current_control_mode_ == MusicPlayer::PlayControlMode::kStop ||
-            current_control_mode_ == MusicPlayer::PlayControlMode::kNext ||
-            current_control_mode_ == MusicPlayer::PlayControlMode::kPrevious) {
-            break;
-        }
-
-        if (!RefillBuffer(http.get(), mp3_buffer, mp3_data_offset, mp3_data_size)) {
-            break;
-        }
-
-        if (mp3_data_size < 512) {
-            continue;
-        }
-        audio_service.UpdateLastOutputTime();
-        if (!DecodeAndPlayFrame(decoder, mp3_buffer, mp3_data_offset, mp3_data_size,
-                                pcm_buffer, consecutive_skip_count)) {
-            break;
-        }
-    }
-    MP3FreeDecoder(decoder);
-    audio_codec_->EnableOutput(false);
-    http->Close();
-    ESP_LOGI(TAG, "Finished playing MP3(%s)", music.name.c_str());
-}
-
-void Mp3MusicPlayer::Play(const std::vector<Music>& music_list) {
-    if (IsPlaying()) {
-        ESP_LOGW(TAG, "Already playing, stop current first");
-        return;
-    }
-    current_music_list_ = music_list;
-    current_control_mode_ = MusicPlayer::PlayControlMode::kUnknown;
-    is_playing_ = true;
-
-    // 创建播放任务
-    xTaskCreate(PlayTask, "mp3_play_task", 8192, this, 15, nullptr);
-
-    ESP_LOGI(TAG, "Started playing MP3 %d tracks", current_music_list_.size());
-}
-
 bool Mp3MusicPlayer::ChangePlayControlMode(const PlayControlMode& mode) {
-    if (current_control_mode_ == mode ||
-        (current_control_mode_ != PlayControlMode::kControlHandled &&
-         current_control_mode_ != PlayControlMode::kUnknown)) {
+    if (mode == current_control_mode_ ||
+        current_control_mode_ != PlayControlMode::kControlHandled ||
+        current_control_mode_ == PlayControlMode::kUnknown) {
+        ESP_LOGD(TAG, "Rejecting mode %d, previous control mode %d still pending", (int)mode,
+                 (int)current_control_mode_.load());
         return false;
     }
     ESP_LOGI(TAG, "ChangePlayControlMode current_control_mode_ %d mode %d",
-             (int)current_control_mode_, (int)mode);
-    current_control_mode_ = mode;
-    return true;
+             (int)current_control_mode_.load(), (int)mode);
+
+    switch (mode) {
+        case PlayControlMode::kPause:
+            is_paused_ = true;
+            current_control_mode_ = mode;
+            return true;
+
+        case PlayControlMode::kResume:
+            is_paused_ = false;
+            pause_cv_.notify_all();
+            current_control_mode_ = PlayControlMode::kControlHandled;
+            return true;
+
+        case PlayControlMode::kStop:
+            is_paused_ = false;
+            pause_cv_.notify_all();
+            current_control_mode_ = mode;
+            return true;
+
+        case PlayControlMode::kNext:
+        case PlayControlMode::kPrevious:
+            is_paused_ = false;
+            pause_cv_.notify_all();
+            current_control_mode_ = mode;
+            return true;
+
+        default:
+            if (current_control_mode_ == mode ||
+                (current_control_mode_ != PlayControlMode::kControlHandled &&
+                 current_control_mode_ != PlayControlMode::kUnknown)) {
+                return false;
+            }
+            current_control_mode_ = mode;
+            return true;
+    }
 }

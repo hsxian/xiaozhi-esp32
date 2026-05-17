@@ -7,7 +7,8 @@
 
 class KwMusicResource : public MusicResource {
 public:
-    virtual bool Search(const QueryBase& query,std::vector<Music>& music_list) override;
+    virtual bool Search(const QueryBase& query, std::vector<Music>& music_list) override;
+    virtual std::string Search(const std::string & params) override;
     void ParseMusicFromJson(cJSON* item, Music& music);
 private:
 };

@@ -53,3 +53,13 @@ bool KwMusicResource::Search(const QueryBase& query, std::vector<Music>& music_l
     cJSON_Delete(json);
     return success;
 }
+
+std::string KwMusicResource::Search(const std::string & params) {
+    RestfulClient restful_client;
+    std::string url = std::format("https://kw-api.cenguigui.cn/?{}", params);
+    ESP_LOGI(TAG, "url: %s", url.c_str());
+
+    bool success = false;
+    std::string response = restful_client.Get(url);
+    return response;
+}

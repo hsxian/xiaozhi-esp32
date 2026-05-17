@@ -22,7 +22,7 @@ bool MusicPlayer::IsNeedWaitPalySattus() const {
         }
         // 切换状态
         app.ToggleChatState();  // 变成待机状态
-        return true;
+        // 不要立即返回true，而是等待下一个调用周期来验证状态是否已更改
     }
-    return current_state != kDeviceStateIdle;  // 其他状态都需要等待
+    return app.GetDeviceState() != kDeviceStateIdle;  // 检查更新后的状态
 }

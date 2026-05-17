@@ -19,7 +19,6 @@
 
 #include "clock/alarm_event_config.h"
 #include "clock/alarm_manager.h"
-#include "media/music/music_manager.h"
 
 #define TAG "Application"
 
@@ -908,8 +907,6 @@ void Application::HandleStateChangedEvent() {
     auto display = board.GetDisplay();
     auto led = board.GetLed();
     led->OnStateChanged();
-
-    MusicManager::GetInstance().HandleDeviceStateChange(new_state);
 
     switch (new_state) {
         case kDeviceStateUnknown:

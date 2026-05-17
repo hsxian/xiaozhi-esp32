@@ -11,14 +11,14 @@ class McpTool;
 class MusicPlayer;
 
 class MusicManager {
-    public : static MusicManager& GetInstance();
+public : 
+    static MusicManager& GetInstance();
 
     // 生成MCP服务器工具
     void GenerateMcpServerTools(std::vector<McpTool*> & tools);
 
-    void HandleDeviceStateChange(const DeviceState& state);
-
-    private : MusicManager();
+private : 
+    MusicManager();
     ~MusicManager() = default;
 
     void TryResleaseMusicPlayer();

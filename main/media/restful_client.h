@@ -3,7 +3,7 @@
 
 class RestfulClient {
 public:
-    RestfulClient();
+    RestfulClient(int connect_id = -1);
     ~RestfulClient();
     // 发送GET请求
     std::string Get(const std::string& url);
@@ -13,4 +13,6 @@ public:
     void TryGetRedirectUrl(const std::string& url, std::string& redirect_url, int max_redirects = 5);
     std::string UrlEncode(const std::string& value);
     std::string NormalizeUrl(const std::string& url);
+private:
+        int connect_id_;
 };

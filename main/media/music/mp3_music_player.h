@@ -9,6 +9,7 @@
 #include <vector>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include "device_state.h"
 
 class AudioCodec;
 class Http;
@@ -35,8 +36,8 @@ public:
     void Play(const std::vector<Music>& music_list) override;
     bool ChangePlayControlMode(const PlayControlMode& mode) override;
     bool IsPlaying() const override;
-
-private:
+    
+    private:
     // 下载线程函数
     static void DownloadTask(void* arg);
     void DownloadLoop();
@@ -58,9 +59,16 @@ private:
                             size_t& mp3_data_size, std::vector<int16_t>& pcm_buffer,
                             int& consecutive_skip_count);
     
+    bool CanChangePlayControlMode(const PlayControlMode& mode);
     // 清理资源
     void CleanupResources();
+
+    void OnStateMachineCallback(DeviceState old_state, DeviceState new_state);
     
+    bool TrySetControlModeToHandled(int task_flag);
+    void ResetHandledTaskListFlag();
+    void WaitPalySattus();  // 是否需要等待播放状态
+    void UpdateTimeInfo(int codec_output_rate, int output_samples, int output_channels,const MP3FrameInfo& frame_info);
 
     static constexpr int MAX_CONSECUTIVE_SKIPS = 100;  // 跳过超过100次则停止该曲目
     static constexpr int BUFFER_SIZE = 1 * 1024;       // 减小缓冲区到1KB，降低内存压力并减缓下载速度
@@ -68,6 +76,7 @@ private:
     static constexpr int QUEUE_SIZE = 16;              // 队列大小
     static constexpr int HIGH_WATER_MARK = 8;          // 降低高水位标记，更早开始节流
     static constexpr int CRITICAL_WATER_MARK = 14;     // 临界水位，接近满队列
+    static constexpr int TASK_LIST_FLAG = 0b11;       // 任务列表标志位
 
     AudioCodec* audio_codec_;
     std::atomic<bool> is_playing_{false};
@@ -85,7 +94,9 @@ private:
     QueueHandle_t mp3_queue_;  // MP3数据队列
     TaskHandle_t download_task_handle_{nullptr};
     TaskHandle_t decode_task_handle_{nullptr};
-    int current_track_index_{0};
+    std::atomic<int> current_track_index_{0};
+    std::atomic<int> handled_task_list_flag_{0};
     std::string current_url_;
     size_t download_bytes_received_{0};
+    int listener_id_{-1};
 };

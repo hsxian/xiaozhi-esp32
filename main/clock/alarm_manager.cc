@@ -290,6 +290,8 @@ void AlarmManager::LoadHolidays() {
     // 如果没有加载到节假日，使用内置数据
     if (holidays_.empty()) {
         ESP_LOGW(TAG, "No holidays loaded from network, using built-in data");
+    }else{
+        UpdateTimerLocked();
     }
 }
 

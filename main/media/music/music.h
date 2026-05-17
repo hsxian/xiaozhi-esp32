@@ -25,4 +25,5 @@ public:
     void FromJson(const cJSON* item);
     static std::string ToJsonArray(std::vector<Music>& musics);
     static void FromJsonArray(cJSON* array, std::vector<Music>& musics);
+    std::string ToString() const;
 };

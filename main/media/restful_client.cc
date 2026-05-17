@@ -8,59 +8,91 @@
 #define USER_AGENT                                                                             \
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 " \
     "Safari/537.36"
-RestfulClient::RestfulClient() {}
+RestfulClient::RestfulClient(int connect_id) : connect_id_(connect_id) {}
 
 RestfulClient::~RestfulClient() {}
 
 std::string RestfulClient::Get(const std::string& url) {
     std::string response;
-    auto http = Board::GetInstance().GetNetwork()->CreateHttp();
-    http->SetHeader("User-Agent", USER_AGENT);
-    if (!http->Open("GET", url)) {
-        ESP_LOGE(TAG, "Get Failed to open HTTP connection for: %s", url.c_str());
-        return response;
-    }
+    const int max_retries = 2;
+    
+    for (int retry = 0; retry <= max_retries; retry++) {
+        auto http = Board::GetInstance().GetNetwork()->CreateHttp(connect_id_);
+        http->SetHeader("User-Agent", USER_AGENT);
+        
+        if (!http->Open("GET", url)) {
+            ESP_LOGE(TAG, "Get Failed to open HTTP connection for: %s (retry %d/%d)", url.c_str(), retry, max_retries);
+            continue;
+        }
 
-    int status_code = http->GetStatusCode();
-    if (status_code != 200) {
-        ESP_LOGE(TAG, "HTTP request failed, status code: %d", status_code);
+        int status_code = http->GetStatusCode();
+        if (status_code != 200) {
+            ESP_LOGE(TAG, "HTTP request failed, status code: %d (retry %d/%d)", status_code, retry, max_retries);
+            http->Close();
+            continue;
+        }
+
+        response = http->ReadAll();
+        
+        // Check if response was received (connection may have closed prematurely)
+        if (response.empty()) {
+            ESP_LOGE(TAG, "Empty response received, connection may have closed prematurely (retry %d/%d)", retry, max_retries);
+            http->Close();
+            continue;
+        }
+        
         http->Close();
+        ESP_LOGI(TAG, "HTTP response received: %d bytes", response.length());
         return response;
     }
-
-    response = http->ReadAll();
-    http->Close();
-    ESP_LOGI(TAG, "HTTP response received: %d bytes", response.length());
+    
+    ESP_LOGE(TAG, "All %d retries failed for URL: %s", max_retries + 1, url.c_str());
     return response;
 }
 
 std::string RestfulClient::Post(const std::string& url, const std::string& body,
                                 const std::string& content_type) {
     std::string response;
-    auto http = Board::GetInstance().GetNetwork()->CreateHttp();
-    http->SetHeader("User-Agent", USER_AGENT);
-    if (!http->Open("POST", url)) {
-        ESP_LOGE(TAG, "Post Failed to open HTTP connection for: %s", url.c_str());
-        return response;
-    }
+    const int max_retries = 2;
+    
+    for (int retry = 0; retry <= max_retries; retry++) {
+        auto http = Board::GetInstance().GetNetwork()->CreateHttp(connect_id_);
+        http->SetHeader("User-Agent", USER_AGENT);
+        
+        if (!http->Open("POST", url)) {
+            ESP_LOGE(TAG, "Post Failed to open HTTP connection for: %s (retry %d/%d)", url.c_str(), retry, max_retries);
+            continue;
+        }
 
-    // 设置Content-Type请求头
-    http->SetHeader("Content-Type", content_type);
+        // 设置Content-Type请求头
+        http->SetHeader("Content-Type", content_type);
 
-    // 写入请求体
-    http->Write(body.c_str(), body.size());
-    http->Write("", 0);  // 结束写入
+        // 写入请求体
+        http->Write(body.c_str(), body.size());
+        http->Write("", 0);  // 结束写入
 
-    int status_code = http->GetStatusCode();
-    if (status_code != 200 && status_code != 201) {
-        ESP_LOGE(TAG, "HTTP POST request failed, status code: %d", status_code);
+        int status_code = http->GetStatusCode();
+        if (status_code != 200 && status_code != 201) {
+            ESP_LOGE(TAG, "HTTP POST request failed, status code: %d (retry %d/%d)", status_code, retry, max_retries);
+            http->Close();
+            continue;
+        }
+
+        response = http->ReadAll();
+        
+        // Check if response was received (connection may have closed prematurely)
+        if (response.empty()) {
+            ESP_LOGE(TAG, "Empty response received, connection may have closed prematurely (retry %d/%d)", retry, max_retries);
+            http->Close();
+            continue;
+        }
+        
         http->Close();
+        ESP_LOGI(TAG, "HTTP POST response received: %d bytes", response.length());
         return response;
     }
-
-    response = http->ReadAll();
-    http->Close();
-    ESP_LOGI(TAG, "HTTP POST response received: %d bytes", response.length());
+    
+    ESP_LOGE(TAG, "All %d retries failed for URL: %s", max_retries + 1, url.c_str());
     return response;
 }
 
@@ -69,7 +101,7 @@ void RestfulClient::TryGetRedirectUrl(const std::string& url, std::string& redir
         ESP_LOGE(TAG, "Max redirects reached for URL: %s", url.c_str());
         return;
     }   
-    auto http = Board::GetInstance().GetNetwork()->CreateHttp();
+    auto http = Board::GetInstance().GetNetwork()->CreateHttp(connect_id_);
     http->SetHeader("User-Agent", USER_AGENT);
     if (!http->Open("GET", url)) {
         ESP_LOGE(TAG, "TryGetRedirectUrl Failed to open HTTP connection for: %s", url.c_str());

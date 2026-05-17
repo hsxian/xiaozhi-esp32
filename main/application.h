@@ -67,6 +67,7 @@ public:
     void Run();
 
     DeviceState GetDeviceState() const { return state_machine_.GetState(); }
+    DeviceStateMachine& GetStateMachine() { return state_machine_; }
     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
     
     /**

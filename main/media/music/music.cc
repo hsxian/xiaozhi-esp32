@@ -4,6 +4,7 @@
 #include "cJSON.h"
 #include "esp_log.h"
 #include "../common/json_helper.h"
+#include <format>
 
 #define TAG "Music"
 
@@ -66,4 +67,9 @@ std::string Music::ToJsonArray(std::vector<Music>& musics) {
     auto json_str = cJSON_Print(array);
     cJSON_Delete(array);
     return json_str;
+}
+
+std::string Music::ToString() const {
+    //美化输出音乐信息，太长了不方便查看，暂时只输出部分字段
+    return std::format("Music[name={}, artist={}, album={}]", name, artist, album);
 }

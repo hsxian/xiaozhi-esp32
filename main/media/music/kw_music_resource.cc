@@ -3,11 +3,15 @@
 #include <esp_log.h>
 #include <format>
 #include <algorithm>
-#include "../restful_client.h"
+#include "media/common/restful_client.h"
 #include "cJSON.h"
 
 #define TAG "KwMusicResource"
-
+#ifdef CONFIG_KW_MUSIC_ADDRESS
+_Static_assert(sizeof(CONFIG_KW_MUSIC_ADDRESS) > 1, "CONFIG_KW_MUSIC_ADDRESS不能为空");
+#else
+#error "CONFIG_KW_MUSIC_ADDRESS is not defined"
+#endif
 // 辅助函数：替换字符串中的子串
 static std::string ReplaceString(const std::string& str, const std::string& from, const std::string& to) {
     std::string result = str;
@@ -22,7 +26,7 @@ bool KwMusicResource::Search(const QueryBase& query, std::vector<Music>& music_l
 
     RestfulClient restful_client;
     std::string keyword = restful_client.UrlEncode(query.keyword);
-    std::string url = std::format("https://kw-api.cenguigui.cn/?name={}&page={}&limit={}", keyword,
+    std::string url = std::format("{}?name={}&page={}&limit={}", CONFIG_KW_MUSIC_ADDRESS, keyword,
                                   query.page, query.page_size);
     ESP_LOGI(TAG, "url: %s", url.c_str());
 
@@ -56,7 +60,7 @@ bool KwMusicResource::Search(const QueryBase& query, std::vector<Music>& music_l
 
 std::string KwMusicResource::Search(const std::string & params) {
     RestfulClient restful_client;
-    std::string url = std::format("https://kw-api.cenguigui.cn/?{}", params);
+    std::string url = std::format("{}{}", CONFIG_KW_MUSIC_ADDRESS, params);
     ESP_LOGI(TAG, "url: %s", url.c_str());
 
     bool success = false;

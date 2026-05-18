@@ -17,8 +17,10 @@
 #include <arpa/inet.h>
 #include <font_awesome.h>
 
+#if CONFIG_ENABLE_ALARM
 #include "clock/alarm_event_config.h"
 #include "clock/alarm_manager.h"
+#endif
 
 #define TAG "Application"
 
@@ -183,7 +185,9 @@ void Application::Initialize() {
     // Update the status bar immediately to show the network state
     display->UpdateStatusBar(true);
 
+    #if CONFIG_ENABLE_ALARM
     AlarmManager::GetInstance().Initialize();
+    #endif
 }
 
 void Application::Run() {
@@ -282,9 +286,11 @@ void Application::Run() {
             }
         }
 
+        #if CONFIG_ENABLE_ALARM
         if (bits & MAIN_EVENT_ALARM_CLOCK_RINGING) {
             AlarmEventConfig::GetInstance().HandleAlarmRingingEvent(aborted_, protocol_);
         }
+        #endif
     }
 }
 
@@ -363,7 +369,9 @@ void Application::ActivationTask() {
     // Initialize the protocol
     InitializeProtocol();
 
+    #if CONFIG_ENABLE_ALARM
     AlarmManager::GetInstance().LoadHolidays();
+    #endif
 
     #if TEST
     testOnNetwork();
@@ -857,12 +865,14 @@ void Application::HandleWakeWordDetectedEvent() {
         // Restart the activation check if the wake word is detected during activation
         SetDeviceState(kDeviceStateIdle);
     }
+    #if CONFIG_ENABLE_ALARM
     else if (state == kDeviceStateAlarmClock) {
         if (AlarmEventConfig::GetInstance().HandleWakeWordDetected(wake_word, protocol_)) {
             SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop
                                                   : kListeningModeRealtime);
         }
     }
+    #endif
 }
 
 void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
@@ -967,10 +977,11 @@ void Application::HandleStateChangedEvent() {
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(false);
             break;
-
+        #if CONFIG_ENABLE_ALARM
         case kDeviceStateAlarmClock:
             AlarmEventConfig::GetInstance().SetDeviceState();
             break;
+        #endif
 
         default:
             // Do nothing

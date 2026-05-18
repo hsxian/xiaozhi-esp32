@@ -17,9 +17,12 @@
 #include "settings.h"
 #include "lvgl_theme.h"
 #include "lvgl_display.h"
-
+#if CONFIG_ENABLE_ALARM
 #include "clock/alarm_manager.h"
+#endif
+#if CONFIG_ENABLE_MUSIC
 #include "media/music/music_manager.h"
+#endif
 
 #define TAG "MCP"
 
@@ -80,12 +83,18 @@ void McpServer::AddCommonTools() {
             });
     }
 
+#if CONFIG_ENABLE_PERSONAL_DEVELOPMENT
     std::vector<McpTool*> tools;
+#if CONFIG_ENABLE_ALARM
     AlarmManager::GetInstance().GenerateMcpServerTools(tools);
+#endif
+#if CONFIG_ENABLE_MUSIC
     MusicManager::GetInstance().GenerateMcpServerTools(tools);
+#endif
     for (auto tool : tools) {
         AddTool(tool);
     }
+#endif
 
 #ifdef HAVE_LVGL
     auto display = board.GetDisplay();

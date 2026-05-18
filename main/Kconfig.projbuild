@@ -969,3 +969,41 @@ menu "TAIJIPAI_S3_CONFIG"
 endmenu
 
 endmenu
+
+
+menu "Personal Development Configuration"
+    config ENABLE_PERSONAL_DEVELOPMENT
+            bool "Enable Personal Development"
+            default y
+            help 
+                Enable personal development.
+    if ENABLE_PERSONAL_DEVELOPMENT
+        menu "Alarm Configuration"
+            config ENABLE_ALARM
+                bool "Enable Alarm"
+                default y
+                help 
+                    Enable alarm.
+        endmenu
+
+        menu "Music Configuration"
+            config ENABLE_MUSIC
+                bool "Enable Music"
+                default y
+                help 
+                    Enable music.
+            config ENABLE_KW_MUSIC
+                bool "Enable kw Music Search"
+                default y
+                depends on ENABLE_MUSIC
+                help
+                    Enable kw music.
+            config KW_MUSIC_ADDRESS
+                string "kw Music Address"
+                default ""
+                depends on ENABLE_KW_MUSIC
+                help
+                    kw music address, format: http://IP:PORT/
+        endmenu
+    endif
+endmenu

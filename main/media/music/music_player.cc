@@ -12,9 +12,10 @@ bool MusicPlayer::IsNeedWaitDeviceSattus() const {
     // 状态转换：说话中-》聆听中-》待机状态-》播放音乐
     if (current_state == kDeviceStateListening || current_state == kDeviceStateSpeaking) {
         if (current_state == kDeviceStateSpeaking) {
-            ESP_LOGI(
+            ESP_LOGD(
                 TAG,
                 "Device is in speaking state, switching to listening state for music playback");
+            return true;
         }
         if (current_state == kDeviceStateListening) {
             ESP_LOGI(TAG,

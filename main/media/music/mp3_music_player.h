@@ -76,7 +76,7 @@ public:
     static constexpr int QUEUE_SIZE = 16;              // 队列大小
     static constexpr int HIGH_WATER_MARK = 8;          // 降低高水位标记，更早开始节流
     static constexpr int CRITICAL_WATER_MARK = 14;     // 临界水位，接近满队列
-    static constexpr int TASK_LIST_FLAG = 0b11;       // 任务列表标志位
+    static constexpr int TASK_LIST_FLAG = 0b11;        // 任务列表标志位
 
     AudioCodec* audio_codec_;
     std::atomic<bool> is_playing_{false};

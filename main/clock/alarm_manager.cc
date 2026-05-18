@@ -15,7 +15,7 @@
 #include "device_state.h"
 #include "display.h"
 #include "mcp_server.h"
-#include "media/restful_client.h"
+#include "media/common/restful_client.h"
 
 static const char* TAG = "AlarmManager";
 #define RECORD_FILE_NAME "alarm_record"

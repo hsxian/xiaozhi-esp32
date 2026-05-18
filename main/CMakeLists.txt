@@ -29,16 +29,6 @@ set(SOURCES "audio/audio_codec.cc"
             "protocols/protocol.cc"
             "protocols/mqtt_protocol.cc"
             "protocols/websocket_protocol.cc"
-            "media/common/json_helper.cc"
-            "media/restful_client.cc"
-            "media/music/music.cc"
-            "media/music/kw_music_resource.cc"
-            "media/music/music_player.cc"
-            "media/music/mp3_music_player.cc"
-            "media/music/music_manager.cc"
-            "clock/alarm.cc"
-            "clock/alarm_manager.cc"
-            "clock/alarm_event_config.cc"
             "mcp_server.cc"
             "system_info.cc"
             "application.cc"
@@ -1056,6 +1046,22 @@ if(CONFIG_BOARD_TYPE_ESP_VOCAT AND IDF_VERSION_MAJOR LESS 6)
         espressif__touch_button_sensor
     )
 endif()
+
+if(CONFIG_ENABLE_PERSONAL_DEVELOPMENT)
+file(GLOB PERSONAL_DEVELOPMENT_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/media/common/*.cc)
+list(APPEND SOURCES ${PERSONAL_DEVELOPMENT_SOURCES})
+endif()
+
+if(CONFIG_ENABLE_ALARM)
+file(GLOB ALARM_CLOCK_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/clock/*.cc)
+list(APPEND SOURCES ${ALARM_CLOCK_SOURCES})
+endif()
+
+if(CONFIG_ENABLE_MUSIC)
+file(GLOB MUSIC_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/media/music/*.cc)
+list(APPEND SOURCES ${MUSIC_SOURCES})
+endif()
+
 idf_component_register(SRCS ${SOURCES}
                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
                     INCLUDE_DIRS ${INCLUDE_DIRS}

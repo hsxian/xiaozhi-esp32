@@ -2,7 +2,7 @@
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include "../restful_client.h"
+#include "media/common/restful_client.h"
 #include "application.h"
 #include "audio_codec.h"
 #include "board.h"
@@ -468,14 +468,9 @@ void Mp3MusicPlayer::DecodePlayLoop() {
         }
 
         // 更新曲目索引
-        if (current_control_mode_ == MusicPlayer::PlayControlMode::kNext) {
+        if (current_control_mode_ == MusicPlayer::PlayControlMode::kPrevious) {
             if (TrySetControlModeToHandled(1)) {
-                current_track_index_++;
-                display->SetChatMessage("music", "Next track");
-            }
-        } else if (current_control_mode_ == MusicPlayer::PlayControlMode::kPrevious) {
-            if (TrySetControlModeToHandled(1)) {
-                current_track_index_ = std::max(-1, current_track_index_ - 2);
+                current_track_index_ = std::max(0, current_track_index_--);
                 display->SetChatMessage("music", "Previous track");
             }
         } else if (current_control_mode_ == MusicPlayer::PlayControlMode::kStop) {

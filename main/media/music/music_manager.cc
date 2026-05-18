@@ -7,7 +7,7 @@
 #include "board.h"
 #include "kw_music_resource.h"
 #include "mcp_server.h"
-#include "media/restful_client.h"
+#include "media/common/restful_client.h"
 #include "mp3_music_player.h"
 
 #define TAG "MusicManager"
@@ -43,7 +43,7 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
     tools.push_back(tool);
     // 搜索音乐
     tool = new McpTool("self.music.search",
-                       "a tool to search music from the internet. You must provide a keyword "
+                       "a tool to search music from the internet,call tool(%%self.music.play) to play music in result. You must provide a keyword "
                        "to search, and you can also provide page number and page size for "
                        "pagination. The result will be a list of music in JSON format.",
                        PropertyList({Property("keyword", kPropertyTypeString),

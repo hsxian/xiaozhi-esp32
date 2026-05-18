@@ -18,7 +18,7 @@
 #include "lvgl_theme.h"
 #include "lvgl_display.h"
 #if CONFIG_ENABLE_ALARM
-#include "clock/alarm_manager.h"
+#include "media/alarm/alarm_manager.h"
 #endif
 #if CONFIG_ENABLE_MUSIC
 #include "media/music/music_manager.h"

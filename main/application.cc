@@ -18,8 +18,8 @@
 #include <font_awesome.h>
 
 #if CONFIG_ENABLE_ALARM
-#include "clock/alarm_event_config.h"
-#include "clock/alarm_manager.h"
+#include "media/alarm/alarm_event_config.h"
+#include "media/alarm/alarm_manager.h"
 #endif
 
 #define TAG "Application"

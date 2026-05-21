@@ -100,11 +100,6 @@ time_t Alarm::toTime(const time_t& now) const {
     time_t alarm_time = mktime(&alarm_tm);
     int64_t now_s = (int64_t)now ;
     int64_t alarm_s =(int64_t)alarm_time ;
-
-    // 如果今天的闹钟时间已经过了，计算明天的
-    if (alarm_s <= now_s) {
-        alarm_s += 24 * 60 * 60;
-    }
     return alarm_s;
 }
 

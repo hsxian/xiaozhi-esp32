@@ -27,15 +27,15 @@ enum class AlarmState {
 struct Alarm {
     std::string id;          // 闹钟唯一ID
     std::string name;        // 闹钟名称
-    int hour;                // 小时 (0-23)
-    int minute;              // 分钟 (0-59)
-    int second;              // 秒 (0-59)
-    int volume;              // 音量 (0-100)
+    uint8_t hour;                // 小时 (0-23)
+    uint8_t minute;              // 分钟 (0-59)
+    uint8_t second;              // 秒 (0-59)
+    uint8_t volume;              // 音量 (0-100)
     RepeatMode repeat_mode;  // 重复模式
-    int repeat_days;         // 自定义重复日期（周日到周六，共7天,每个位表示一个天）最大值为127
+    uint8_t repeat_days;         // 自定义重复日期（周日到周六，共7天,每个位表示一个天）最大值为127
     AlarmState state;        // 闹钟状态
-    int snooze_duration;     // 贪睡时长（分钟），默认5分钟
-    int snooze_count;        // 剩余贪睡次数，-1表示无限次
+    uint16_t snooze_duration;     // 贪睡时长（分钟），默认5分钟
+    uint8_t snooze_count;    // 剩余贪睡次数，-1表示无限次
     time_t start_ring_time;   // 开始响铃时间
     // 默认构造函数
     Alarm();        

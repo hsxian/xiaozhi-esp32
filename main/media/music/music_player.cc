@@ -15,7 +15,6 @@ bool MusicPlayer::IsNeedWaitDeviceSattus() const {
             ESP_LOGD(
                 TAG,
                 "Device is in speaking state, switching to listening state for music playback");
-            return true;
         }
         if (current_state == kDeviceStateListening) {
             ESP_LOGI(TAG,

@@ -7,7 +7,7 @@
 
 class MusicPlayer {
 public:
-    enum PlayControlMode {
+    enum class PlayControlMode: uint8_t {
         kUnknown,
         kControlHandled,
         kPause,

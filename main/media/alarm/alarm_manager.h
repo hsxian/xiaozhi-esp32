@@ -69,8 +69,8 @@ public:
     // 检查某天是否是工作日
     bool IsWorkday(int month, int day, int weekday) const;
 
-    // 检查闹钟今天是否应该响铃
-    bool ShouldRingToday(const Alarm& alarm) const;
+    // 检查闹钟在指定时间点是否应该响铃
+    bool ShouldRingAtTime(const time_t& now, const Alarm& alarm) const;
 
     // 加载节假日配置
     void LoadHolidays();
@@ -91,9 +91,6 @@ private:
     // 保存闹钟配置（到NVS）
     void SaveAlarms();
 
-    // 计算下一次响铃时间
-    int64_t CalculateNextRingTime(const Alarm& alarm) const;
-
     // 更新定时器
     void UpdateTimer();
 
@@ -101,6 +98,9 @@ private:
     bool RemoveAlarmLocked(const std::string& alarm_id);
     // 定时器回调函数
     static void TimerCallback(void* arg);
+
+    // 检查闹钟的后台任务
+    void CheckAlarms();
 
     // 闹钟触发处理
     void OnAlarmTriggered();

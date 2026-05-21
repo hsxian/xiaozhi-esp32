@@ -16,6 +16,7 @@
 #include "display.h"
 #include "mcp_server.h"
 #include "media/common/restful_client.h"
+#include "media/common/string_helper.h"
 
 static const char* TAG = "AlarmManager";
 #define RECORD_FILE_NAME "alarm_record"
@@ -26,7 +27,7 @@ AlarmManager& AlarmManager::GetInstance() {
     return instance;
 }
 
-AlarmManager::AlarmManager() : timer_handle_(nullptr), is_ringing_(false) {}
+AlarmManager::AlarmManager() : timer_handle_(nullptr), is_ringing_(false) { CheckAlarms(); }
 
 AlarmManager::~AlarmManager() {
     if (timer_handle_) {
@@ -37,8 +38,9 @@ AlarmManager::~AlarmManager() {
 
 void AlarmManager::Initialize() {
     time_t now = time(nullptr);
-    struct tm* tm = localtime(&now);
-    ESP_LOGI(TAG, "Initializing AlarmManager at %s", asctime(tm));
+    struct tm tm;
+    localtime_r(&now, &tm);
+    ESP_LOGI(TAG, "Initializing AlarmManager at %s", asctime(&tm));
 
     // 加载闹钟配置
     LoadAlarms();
@@ -125,7 +127,7 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                 }
                 return Alarm::ToJsonArray(alarms);
             }
-            return "";         
+            return "";
         });
     tools.push_back(tool);
 }
@@ -237,8 +239,9 @@ void AlarmManager::LoadHolidays() {
 
     // 获取当前年份
     time_t now = time(nullptr);
-    struct tm* tm = localtime(&now);
-    int current_year = tm->tm_year + 1900;
+    struct tm tm;
+    localtime_r(&now, &tm);
+    int current_year = tm.tm_year + 1900;
 
     // 网络获取节假日配置
     std::string url =
@@ -290,7 +293,7 @@ void AlarmManager::LoadHolidays() {
     // 如果没有加载到节假日，使用内置数据
     if (holidays_.empty()) {
         ESP_LOGW(TAG, "No holidays loaded from network, using built-in data");
-    }else{
+    } else {
         UpdateTimerLocked();
     }
 }
@@ -344,12 +347,9 @@ bool AlarmManager::RemoveAllAlarms() {
     return true;
 }
 
-std::vector<Alarm> AlarmManager::GetAlarms() const {
-    return alarms_;
-}
+std::vector<Alarm> AlarmManager::GetAlarms() const { return alarms_; }
 
 bool AlarmManager::GetAlarm(const std::string& alarm_id, Alarm& out_alarm) const {
-
     auto it = std::find_if(alarms_.begin(), alarms_.end(),
                            [&](const Alarm& a) { return a.id == alarm_id; });
 
@@ -468,16 +468,11 @@ void AlarmManager::SetAlarmStopCallback(AlarmStopCallback callback) {
     alarm_stop_callback_ = callback;
 }
 
-void AlarmManager::AddHoliday(const Holiday& holiday) {
-    holidays_.push_back(holiday);
-}
+void AlarmManager::AddHoliday(const Holiday& holiday) { holidays_.push_back(holiday); }
 
-std::vector<Holiday> AlarmManager::GetHolidays() const {
-    return holidays_;
-}
+std::vector<Holiday> AlarmManager::GetHolidays() const { return holidays_; }
 
 bool AlarmManager::IsHoliday(int month, int day, int weekday) const {
-
     if (holidays_.empty()) {
         return weekday == 0 || weekday == 6;
     }
@@ -502,45 +497,48 @@ bool AlarmManager::IsWorkday(int month, int day, int weekday) const {
     return true;
 }
 
-bool AlarmManager::ShouldRingToday(const Alarm& alarm) const {
-    time_t now = time(nullptr);
-    struct tm* tm = localtime(&now);
-    int weekday = tm->tm_wday;   // 0=周日, 1=周一, ..., 6=周六
-    int month = tm->tm_mon + 1;  // 1-12
-    int day = tm->tm_mday;       // 1-31
-    ESP_LOGI(TAG,
-             "ShouldRingToday ? alarm time: %02d-%02d-%02d, weekday: %d, repeat mode: %d , repeat "
-             "days: %d",
-             alarm.hour, alarm.minute, alarm.second, weekday, alarm.repeat_mode, alarm.repeat_days);
+bool AlarmManager::ShouldRingAtTime(const time_t& now, const Alarm& alarm) const {
+    struct tm tm;
+    localtime_r(&now, &tm);
+    int weekday = tm.tm_wday;   // 0=周日, 1=周一, ..., 6=周六
+    int month = tm.tm_mon + 1;  // 1-12
+    int day = tm.tm_mday;       // 1-31
+
+    auto ret = false;
     switch (alarm.repeat_mode) {
         case RepeatMode::ONCE: {
             // 检查是否是设置闹钟的当天（简化处理）
             // 实际应该存储闹钟设置的日期
-            return true;
+            ret = true;
+            break;
         }
         case RepeatMode::DAILY:
             return true;
         case RepeatMode::WORKDAYS:
-            return IsWorkday(month, day, weekday);
+            ret = IsWorkday(month, day, weekday);
+            break;
         case RepeatMode::HOLIDAYS:
-            return IsHoliday(month, day, weekday);
+            ret = IsHoliday(month, day, weekday);
+            break;
         case RepeatMode::CUSTOM:
-            return (alarm.repeat_days >> weekday & (1 << weekday)) != 0;
+            ret = (alarm.repeat_days & (1 << weekday)) != 0;
+            break;
         default:
-            return false;
+            ret = false;
+            break;
     }
+    // 打印repeat_days的二进制表示
+    ESP_LOGD(
+        TAG,
+        "ShouldRingAtTime ? %d, alarm time: %02d-%02d-%02d, weekday: %d, repeat mode: %d , repeat "
+        "days: %d",
+        ret, alarm.hour, alarm.minute, alarm.second, weekday, alarm.repeat_mode, alarm.repeat_days);
+    return ret;
 }
 char* to_string(int64_t val) {
     static char buf[20];
     itoa(val, buf, 10);
     return buf;
-}
-int64_t AlarmManager::CalculateNextRingTime(const Alarm& alarm) const {
-    time_t now = time(nullptr);
-    auto alarm_time = alarm.toTime(now);
-    // 计算延迟时间（微秒）
-    auto ret = (int64_t)(difftime(alarm_time, now) * 1000000);
-    return ret;
 }
 
 void AlarmManager::UpdateTimer() {
@@ -553,31 +551,45 @@ void AlarmManager::UpdateTimerLocked() {
 
     int64_t min_delay = INT64_MAX;
     Alarm next_alarm;
+    time_t original_now = time(nullptr);
+    struct tm tm;
+    localtime_r(&original_now, &tm);
+    int weekday = tm.tm_wday;   // 0=周日, 1=周一, ..., 6=周六
+    int month = tm.tm_mon + 1;  // 1-12
+    int day = tm.tm_mday;
+    ESP_LOGI(TAG, "today now: %ld, weekday: %d, month: %d, day: %d", ctime(&original_now), weekday,
+             month, day);
 
     // 找到最早响铃的闹钟
     for (const auto& alarm : alarms_) {
         if (alarm.state != AlarmState::ENABLED) {
             continue;
         }
+        ESP_LOGI(TAG, "alarm: %s(%d-%d-%d), repeat mode: %d, repeat days: %d", alarm.name.c_str(), alarm.hour, alarm.minute, alarm.second, alarm.repeat_mode, alarm.repeat_days);
+        for (int i = 0; i < 7; i++) {
+            time_t check_time = original_now + i * 86400;
+            // 检查今天是否应该响铃
+            if (!ShouldRingAtTime(check_time, alarm)) {
+                continue;
+            }
 
-        // 检查今天是否应该响铃
-        if (!ShouldRingToday(alarm)) {
-            continue;
-        }
-
-        int64_t delay = CalculateNextRingTime(alarm);
-        if (delay > 0 && delay < min_delay) {
-            min_delay = delay;
-            next_alarm = alarm;
+            auto alarm_time = alarm.toTime(check_time);
+            auto delay = difftime(alarm_time, original_now);
+            if (delay > 0 && delay < min_delay) {
+                min_delay = delay;
+                next_alarm = alarm;
+            }
         }
     }
 
     // 如果有闹钟需要响铃，设置定时器
     if (min_delay != INT64_MAX) {
-        esp_timer_start_once(timer_handle_, min_delay);
-        ESP_LOGI(TAG, "Next alarm: %s at %02d:%02d:%02d (in %s ms)", next_alarm.name.c_str(),
-                 next_alarm.hour, next_alarm.minute, next_alarm.second,
-                 to_string(min_delay / 1000));
+
+        StringHelper string_helper;
+        auto delay_str = string_helper.MillisecondToString(min_delay * 1000);
+        esp_timer_start_once(timer_handle_, min_delay * 1000000);
+        ESP_LOGI(TAG, "Next alarm: %s at %02d:%02d:%02d (after %s)", next_alarm.name.c_str(),
+                 next_alarm.hour, next_alarm.minute, next_alarm.second, delay_str.c_str());
     }
 }
 
@@ -590,7 +602,8 @@ void AlarmManager::OnAlarmTriggered() {
     std::lock_guard<std::mutex> lock(mutex_);
 
     time_t now = time(nullptr);
-    struct tm* tm = localtime(&now);
+    struct tm tm;
+    localtime_r(&now, &tm);
 
     // 找到应该响铃的闹钟
     for (auto& alarm : alarms_) {
@@ -599,13 +612,13 @@ void AlarmManager::OnAlarmTriggered() {
         }
 
         // 检查时间是否匹配（允许1秒误差）
-        if (abs(alarm.hour - tm->tm_hour) > 0 || abs(alarm.minute - tm->tm_min) > 0 ||
-            abs(alarm.second - tm->tm_sec) > 1) {
+        if (abs(alarm.hour - tm.tm_hour) > 0 || abs(alarm.minute - tm.tm_min) > 0 ||
+            abs(alarm.second - tm.tm_sec) > 1) {
             continue;
         }
 
         // 检查是否应该今天响铃
-        if (!ShouldRingToday(alarm)) {
+        if (!ShouldRingAtTime(now, alarm)) {
             continue;
         }
 
@@ -665,3 +678,5 @@ bool AlarmManager::IsRinging() const { return is_ringing_; }
 void AlarmManager::GetCurrentRingingAlarm(Alarm& out_alarm) const {
     out_alarm = current_ringing_alarm_;
 }
+
+void AlarmManager::CheckAlarms() {}

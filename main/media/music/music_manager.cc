@@ -5,7 +5,7 @@
 #include <string.h>
 #include "audio_codec.h"
 #include "board.h"
-#include "kw_music_resource.h"
+#include "music_resource.h"
 #include "mcp_server.h"
 #include "media/common/restful_client.h"
 #include "mp3_music_player.h"
@@ -28,11 +28,11 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         "mode can be one of the following values: 2 for pause, 3 for resume, 4 for stop, 5 for "
         "next track, 6 for previous track.",
         PropertyList({Property(
-            "controlMode", kPropertyTypeInteger, MusicPlayer::PlayControlMode::kPause,
-            MusicPlayer::PlayControlMode::kPause, MusicPlayer::PlayControlMode::kPrevious)}),
+            "controlMode", kPropertyTypeInteger, (int)MusicPlayer::PlayControlMode::kPause,
+            (int)MusicPlayer::PlayControlMode::kPause, (int)MusicPlayer::PlayControlMode::kPrevious)}),
         [this](const PropertyList& properties) -> ReturnValue {
             // Implement play logic here
-            int controlMode = properties["controlMode"].value<int>();
+            auto controlMode = properties["controlMode"].value<int>();
             if (music_player_ == nullptr || music_player_->IsPlaying() == false) {
                 return false;
             }
@@ -43,7 +43,7 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
     tools.push_back(tool);
     // 搜索音乐
     tool = new McpTool("self.music.search",
-                       "a tool to search music from the internet,call tool(%%self.music.play) to play music in result. You must provide a keyword "
+                       "a tool to search music from the internet,call tool(%% self.music.play) to play music in result. You must provide a keyword "
                        "to search, and you can also provide page number and page size for "
                        "pagination. The result will be a list of music in JSON format.",
                        PropertyList({Property("keyword", kPropertyTypeString),
@@ -56,13 +56,14 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                            query.page = properties["page"].value<int>();
                            query.page_size = properties["pageSize"].value<int>();
 
-                           KwMusicResource resource;
+                           auto resource = MusicResource::NewMusicResource();
                            music_search_list_.clear();
                            RestfulClient restful_client;
                            std::string keyword = restful_client.UrlEncode(query.keyword);
                            auto parms = std::format("name={}&page={}&limit={}", keyword, query.page,
                                                     query.page_size);
-                           auto search_result = resource.Search(parms);
+                           auto search_result = resource->Search(parms);
+                           delete resource;
                            return search_result;
                        });
     tools.push_back(tool);
@@ -78,7 +79,7 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
     tool = new McpTool(
         "self.music.play",
         "a tool to play music by provide the json array(.eg "
-        "[{\"name\":\"music_name\",\"artist\":\"artist_name\",\"url\":\"music_url\",\"album\":\"album_name\"}]) of the "
+        "[{\"name\":\"music_name\",\"artist\":\"artist_name\",\"url\":\"music_url\",\"album\":\"album_name\",\"lrc\":\"lrc_url\"}] ) of the "
         "music to play.",
         PropertyList({Property("musicList", kPropertyTypeString)}),
         [this](const PropertyList& properties) -> ReturnValue {
@@ -105,6 +106,14 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
             TryResleaseMusicPlayer();
             return "Failed to play music";
         });
+    tools.push_back(tool);
+
+    // 播放状态查询
+    tool = new McpTool("self.music.status",
+                       "a tool to get music status.",
+                       PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+                           return music_player_ && music_player_->IsPlaying();
+                       });
     tools.push_back(tool);
 }
 

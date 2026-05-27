@@ -16,26 +16,11 @@ class Http;
 class Display;
 class NetworkInterface;
 class Lyrics;
-
+class HttpStream;
+struct DataChunk;
 typedef struct _MP3FrameInfo MP3FrameInfo;
 typedef void* HMP3Decoder;
 
-// MP3数据块状态枚举（使用 uint8_t 节省内存）
-enum class Mp3DataStatus : uint8_t {
-    kNormal,    // 正常数据
-    kEos,       // 流结束
-    kError,      // 错误
-    kTimeout,    // 超时错误
-};
-
-// MP3数据块结构
-struct Mp3DataChunk {
-    uint8_t* data;
-    size_t size;
-    Mp3DataStatus status;
-    Mp3DataChunk() : data(nullptr), size(0), status(Mp3DataStatus::kNormal) {}
-    Mp3DataChunk(uint8_t* d, size_t s) : data(d), size(s), status(Mp3DataStatus::kNormal) {}
-};
 
 class Mp3MusicPlayer : public MusicPlayer {
 public:
@@ -49,21 +34,16 @@ public:
     
 private:
     // 处理接收到的MP3数据块，返回是否继续处理（true=继续，false=结束）
-    bool ProcessReceivedChunk(Mp3DataChunk& chunk, std::vector<uint8_t>& mp3_buffer,
+    bool ProcessReceivedChunk(DataChunk& chunk, std::vector<uint8_t>& mp3_buffer,
                               size_t& mp3_data_offset, size_t& mp3_data_size,
                               bool& track_complete, bool& track_error,
                               const char* log_tag = "Received");
-    // 下载线程函数
-    static void DownloadTask(void* arg);
-    void DownloadLoop();
     
     // 解码播放线程函数
     static void DecodePlayTask(void* arg);
     void DecodePlayLoop();
     
     // 播放控制函数
-    bool PreparePlayback(const Music& music);
-    void ConfigureHttpHeaders(Http* http, const std::string& url);
     void SkipId3Tag(std::vector<uint8_t>& mp3_buffer, size_t& mp3_data_size, size_t& mp3_data_offset);
     void ConvertPcmIfNeeded(const MP3FrameInfo& frame_info,
                             const std::vector<int16_t>& pcm_buffer,
@@ -77,8 +57,6 @@ private:
     bool CanChangePlayControlMode(const PlayControlMode& mode);
     // 清理资源
     void CleanupResources();
-    void SendEosChunk();
-
     void OnStateMachineCallback(DeviceState old_state, DeviceState new_state);
     
     bool TrySetControlModeToHandled(int task_flag);
@@ -94,10 +72,10 @@ private:
     static constexpr int QUEUE_SIZE = 16;              // 队列大小
     static constexpr int HIGH_WATER_MARK = 8;          // 降低高水位标记，更早开始节流
     static constexpr int CRITICAL_WATER_MARK = 14;     // 临界水位，接近满队列
-    static constexpr int TASK_LIST_FLAG = 0b11;        // 任务列表标志位
+    static constexpr int TASK_LIST_FLAG = 0b01;        // 任务列表标志位
 
-    AudioCodec* audio_codec_;
-    Display* display_;
+    AudioCodec* audio_codec_{nullptr};
+    Display* display_{nullptr};
     std::atomic<bool> is_playing_{false};
     std::atomic<bool> is_downloading_{false};
     std::atomic<bool> is_paused_{false};
@@ -107,12 +85,9 @@ private:
     std::vector<Music> current_music_list_;
     std::atomic<MusicPlayer::PlayControlMode> current_control_mode_{MusicPlayer::PlayControlMode::kUnknown};
     Lyrics* lyrics_{nullptr};
+    HttpStream* http_stream_{nullptr};
 
     // 共享资源
-    std::unique_ptr<Http> http_;
-    NetworkInterface* network_{nullptr};
-    QueueHandle_t mp3_queue_;  // MP3数据队列
-    TaskHandle_t download_task_handle_{nullptr};
     TaskHandle_t decode_task_handle_{nullptr};
     std::atomic<int> current_track_index_{0};
     std::atomic<int> handled_task_list_flag_{0};

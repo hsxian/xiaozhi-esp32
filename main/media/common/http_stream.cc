@@ -34,13 +34,13 @@ esp_err_t HttpStream::http_event_handler(esp_http_client_event_t* evt) {
             chunk.status = DataStatus::kNormal;
             stream->download_bytes_received_ += evt->data_len;
             stream->SendData(chunk);
-            ESP_LOGI(TAG, "HTTP_EVENT_ON_DATA, len=%d, download_bytes_received=%d", evt->data_len,
+            ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d, download_bytes_received=%d", evt->data_len,
                      stream->download_bytes_received_);
 
         } break;
         case HTTP_EVENT_ON_FINISH:
             ESP_LOGI(TAG, "HTTP_EVENT_ON_FINISH");
-            stream->SendEos();
+            // stream->SendEos();
             break;
         case HTTP_EVENT_ERROR: {
             auto error = esp_http_client_get_errno(evt->client);
@@ -53,7 +53,7 @@ esp_err_t HttpStream::http_event_handler(esp_http_client_event_t* evt) {
                 ESP_LOGE(TAG, "Last esp error code: 0x%x", err);
                 ESP_LOGE(TAG, "Last mbedtls failure: 0x%x", mbedtls_err);
             }
-            stream->SendError();
+            // stream->SendError();
             return error;  // Return the actual error code
         } break;
         case HTTP_EVENT_DISCONNECTED: {
@@ -63,10 +63,16 @@ esp_err_t HttpStream::http_event_handler(esp_http_client_event_t* evt) {
                                                              &mbedtls_err, NULL);
             if (err != 0) {
                 ESP_LOGW(TAG, "Disconnect with error code: 0x%x, mbedtls: 0x%x", err, mbedtls_err);
-                stream->SendError();
+                // stream->SendError();
                 return err;  // Return error on abnormal disconnect
             }
         } break;
+        case HTTP_EVENT_ON_HEADER:
+            if (strcmp(evt->header_key, "Content-Length") == 0) {
+                stream->content_length_ = atoll(evt->header_value);
+                ESP_LOGI(TAG, "Content-Length: %lld", stream->content_length_);
+            }
+            break;
         // case HTTP_EVENT_ON_HEADER:
         //     ESP_LOGD(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key,
         //              evt->header_value);
@@ -81,12 +87,7 @@ esp_err_t HttpStream::http_event_handler(esp_http_client_event_t* evt) {
     }
     return ESP_OK;
 }
-bool HttpStream::Init(int timeout_ms) {
-    esp_http_client_config_t config = {
-        .timeout_ms = timeout_ms, .event_handler = http_event_handler, .user_data = this};
-    client_ = esp_http_client_init(&config);
-    return client_ != nullptr;
-}
+
 bool HttpStream::Open(const std::string& url) {
     url_str_ = url;
 
@@ -97,6 +98,17 @@ bool HttpStream::Open(const std::string& url) {
     ESP_LOGI(TAG, "start OpenTask request => %s", url.c_str());
     xTaskCreate(OpenTask, "OpenTask", 8192, this, 2, &task_handle_);
     return true;
+}
+
+void HttpStream::StopRequest() {
+    if (client_ != nullptr) {
+        ESP_LOGI(TAG, "Force closing HTTP connection");
+        esp_http_client_close(client_);
+    }
+    if (task_handle_ != nullptr) {
+        vTaskDelete(task_handle_);
+        task_handle_ = nullptr;
+    }
 }
 
 void HttpStream::OpenTask(void* arg) {
@@ -130,6 +142,7 @@ void HttpStream::OpenTask(void* arg) {
     ESP_LOGI(TAG, "OpenTask, perform request");
     esp_err_t err;
     for (int attempt = 0; attempt < 6; attempt++) {
+        stream->content_length_ = 0;
         err = esp_http_client_perform(client);
         if (err == ESP_OK)
             break;
@@ -165,17 +178,25 @@ void HttpStream::SendEos() {
 void HttpStream::SendData(DataChunk chunk) {
     UBaseType_t queue_count = uxQueueMessagesWaiting(data_queue_);
 
+    // 诊断日志：记录发送时的队列深度
+    static int send_count = 0;
+    static int throttle_count = 0;
+    send_count++;
+
     // 智能流量控制：根据队列深度动态调整等待时间
     // 当队列深度超过高水位时，主动等待解码线程消费
     if (queue_count >= HIGH_WATER_MARK) {
+        throttle_count++;
         // 等待时间与队列深度成正比，指数增长
         int wait_ms = (queue_count - HIGH_WATER_MARK + 1) * 100;
-        ESP_LOGD(TAG, "Queue deep (%d/%d), throttling download for %dms", queue_count, QUEUE_SIZE,
-                 wait_ms);
+        ESP_LOGD(TAG, "[QDIAG] Qdeep (%d/%d) thr#%d (tot:%d ok:%d) wait%dms",
+                 queue_count, QUEUE_SIZE, throttle_count, send_count,
+                 send_count - throttle_count, wait_ms);
         vTaskDelay(pdMS_TO_TICKS(wait_ms));
 
         // 重新检查队列深度
         queue_count = uxQueueMessagesWaiting(data_queue_);
+        ESP_LOGD(TAG, "[QDIAG] After throttle, queue depth=%d", queue_count);
     }
 
     // 当队列接近满时，使用较长的超时时间
@@ -191,16 +212,16 @@ void HttpStream::SendData(DataChunk chunk) {
 
     BaseType_t send_result = xQueueSend(data_queue_, &chunk, timeout);
     if (send_result != pdPASS) {
-        // 队列仍然满，改为阻塞式等待（不丢包）
-        ESP_LOGW(TAG, "Queue full after %dms wait, blocking until space available",
-                 timeout / portTICK_PERIOD_MS);
-        // 使用 portMAX_DELAY 无限等待，直到队列有空间
-        if (xQueueSend(data_queue_, &chunk, portMAX_DELAY) != pdPASS) {
-            // 理论上不会到达这里，除非队列被删除
-            ESP_LOGE(TAG, "Failed to send chunk even with infinite wait!");
-            delete[] chunk.data;
+        UBaseType_t qb = uxQueueMessagesWaiting(data_queue_);
+        // 使用有限超时而不是无限等待，避免阻塞HTTP事件处理
+        send_result = xQueueSend(data_queue_, &chunk, pdMS_TO_TICKS(500));
+        if (send_result != pdPASS) {
+            UBaseType_t qa = uxQueueMessagesWaiting(data_queue_);
+            ESP_LOGW(TAG, "[QDIAG] Queue FULL, dropped chunk qb=%d qa=%d", qb, qa);
+            delete[] chunk.data;  // 释放内存而不是无限等待
+            return;
         }
-    };
+    }
 }
 
 void HttpStream::ClearDataQueue() {
@@ -209,4 +230,10 @@ void HttpStream::ClearDataQueue() {
         xQueueReceive(data_queue_, &chunk, portMAX_DELAY);
         delete[] chunk.data;
     }
+}
+QueueHandle_t& HttpStream::GetDataQueue() {
+    return data_queue_;
+}
+int64_t HttpStream::GetContentLength() const {
+    return content_length_;
 }

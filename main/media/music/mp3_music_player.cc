@@ -181,6 +181,8 @@ void Mp3MusicPlayer::DecodePlayLoop() {
         ESP_LOGI(TAG, "Playing track %d/%d: %s", 1 + current_track_index_,
                  static_cast<int>(current_music_list_.size()), music.ToString().c_str());
 
+        DownloadLyrics(music);
+        
         http_stream_->Open(music.url);
 
         display_->SetChatMessage("music", ("Playing: " + music.ToString()).c_str());
@@ -262,7 +264,7 @@ void Mp3MusicPlayer::DecodePlayLoop() {
                                           track_complete, track_error, "Received")) {
                     break;
                 }
-                ESP_LOGI(TAG, "[DECODE] loop#%d recv sz=%d buf_sz=%d->%d",
+                ESP_LOGD(TAG, "[DECODE] loop#%d recv sz=%d buf_sz=%d->%d",
                          decode_loop_count, (int)chunk.size,
                          (int)(prev_offset + prev_size),
                          (int)(mp3_data_offset + mp3_data_size));

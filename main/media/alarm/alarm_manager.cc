@@ -27,7 +27,10 @@ AlarmManager& AlarmManager::GetInstance() {
     return instance;
 }
 
-AlarmManager::AlarmManager() : timer_handle_(nullptr), is_ringing_(false) { CheckAlarms(); }
+AlarmManager::AlarmManager()
+    : timer_handle_(nullptr), is_ringing_(false), display_(Board::GetInstance().GetDisplay()) {
+    CheckAlarms();
+}
 
 AlarmManager::~AlarmManager() {
     if (timer_handle_) {
@@ -454,12 +457,22 @@ void AlarmManager::Snooze() {
 
     CallAlarmStopCallback(current_ringing_alarm_);
 
-    // 设置贪睡定时器
-    int64_t snooze_ms = (int64_t)current_ringing_alarm_.snooze_duration * 60 * 1000;
-    esp_timer_stop(timer_handle_);
-    esp_timer_start_once(timer_handle_, snooze_ms);
+    // 同步状态到 alarms_ 向量中的原始闹钟
+    auto it = std::find_if(alarms_.begin(), alarms_.end(),
+                           [&](const Alarm& a) { return a.id == current_ringing_alarm_.id; });
+    if (it != alarms_.end()) {
+        it->state = AlarmState::SNOOZED;
+        it->snooze_count = current_ringing_alarm_.snooze_count;
+    }
 
-    ESP_LOGI(TAG, "Alarm snoozed for %d minutes", current_ringing_alarm_.snooze_duration);
+    // 设置贪睡定时器
+    int64_t snooze_us = (int64_t)current_ringing_alarm_.snooze_duration * 60 * 1000000;
+    esp_timer_stop(timer_handle_);
+    esp_timer_start_once(timer_handle_, snooze_us);
+
+    auto msg = std::format("Alarm snoozed for {} minutes", current_ringing_alarm_.snooze_duration);
+    auto msg_str = msg.c_str();
+    display_->SetChatMessage("alarm", msg_str);
 }
 
 void AlarmManager::SetAlarmCallback(AlarmCallback callback) { alarm_callback_ = callback; }
@@ -562,7 +575,7 @@ void AlarmManager::UpdateTimerLocked() {
 
     // 找到最早响铃的闹钟
     for (const auto& alarm : alarms_) {
-        if (alarm.state != AlarmState::ENABLED) {
+        if (alarm.state != AlarmState::ENABLED && alarm.state != AlarmState::SNOOZED) {
             continue;
         }
         ESP_LOGI(TAG, "alarm: %s(%d-%d-%d), repeat mode: %d, repeat days: %d", alarm.name.c_str(), alarm.hour, alarm.minute, alarm.second, alarm.repeat_mode, alarm.repeat_days);
@@ -588,8 +601,10 @@ void AlarmManager::UpdateTimerLocked() {
         StringHelper string_helper;
         auto delay_str = string_helper.MillisecondToString(min_delay * 1000);
         esp_timer_start_once(timer_handle_, min_delay * 1000000);
-        ESP_LOGI(TAG, "Next alarm: %s at %02d:%02d:%02d (after %s)", next_alarm.name.c_str(),
-                 next_alarm.hour, next_alarm.minute, next_alarm.second, delay_str.c_str());
+        auto msg = std::format("Next alarm: {} at {}:{}:{} (after {})", next_alarm.name,
+                               next_alarm.hour, next_alarm.minute, next_alarm.second, delay_str);
+        auto msg_str = msg.c_str();
+        display_->SetChatMessage("alarm", msg_str);
     }
 }
 
@@ -607,7 +622,7 @@ void AlarmManager::OnAlarmTriggered() {
 
     // 找到应该响铃的闹钟
     for (auto& alarm : alarms_) {
-        if (alarm.state != AlarmState::ENABLED) {
+        if (alarm.state != AlarmState::ENABLED && alarm.state != AlarmState::SNOOZED) {
             continue;
         }
 
@@ -630,8 +645,9 @@ void AlarmManager::OnAlarmTriggered() {
 
         CallAlarmCallback(alarm);
 
-        ESP_LOGI(TAG, "Alarm triggered: %s (%02d:%02d:%02d)", alarm.name.c_str(), alarm.hour,
-                 alarm.minute, alarm.second);
+        auto msg = std::format("Alarm triggered: {} ({}:{}:{})", alarm.name, alarm.hour, alarm.minute, alarm.second);
+        auto msg_str = msg.c_str();
+        display_->SetChatMessage("alarm", msg_str);
         // 更新定时器（设置下一个闹钟）
         UpdateTimerLocked();
     }
@@ -648,8 +664,6 @@ void AlarmManager::CallAlarmCallback(const Alarm& alarm) {
     // audio_codec->SetOutputVolume(alarm.volume);
 
     auto& app = Application::GetInstance();
-    auto display = Board::GetInstance().GetDisplay();
-    display->SetChatMessage("system", alarm.name.c_str());
 
     // 触发回调
     if (alarm_callback_) {

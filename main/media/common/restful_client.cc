@@ -13,9 +13,7 @@
     "Safari/537.36"
 
 #define MAX_HTTP_TIMEOUT_MS 60000
-RestfulClient::RestfulClient(int connect_id) : connect_id_(connect_id) {
-
-}
+RestfulClient::RestfulClient(int connect_id) : connect_id_(connect_id) {}
 
 RestfulClient::~RestfulClient() {}
 
@@ -42,33 +40,47 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
                 ESP_LOGI(TAG, "Last mbedtls failure: 0x%x", mbedtls_err);
             }
         } break;
-        case HTTP_EVENT_ON_HEADER:
-        {
-            ESP_LOGD(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
-            if (strcmp(evt->header_key, "Location") == 0) {
-                auto data_ctx = static_cast<RestfulClient::UserDataContext*>(evt->user_data);
-                if (data_ctx->type == RestfulClient::UserDataType::Location) {
-                    data_ctx->data->assign(evt->header_value);
-                }
-            }
-        } break;
+        // case HTTP_EVENT_ON_HEADER: {
+        //     ESP_LOGD(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key,
+        //              evt->header_value);
+        //     if (strcmp(evt->header_key, "Location") == 0) {
+        //         ESP_LOGI(TAG, "Redirect Location: %s", evt->header_value);
+        //         auto data_ctx = static_cast<RestfulClient::UserDataContext*>(evt->user_data);
+        //         if (data_ctx->type == RestfulClient::UserDataType::Location) {
+        //             data_ctx->data->assign(evt->header_value);
+        //         }
+        //     }
+        // } break;
         case HTTP_EVENT_REDIRECT:
             ESP_LOGI(TAG, "HTTP_EVENT_REDIRECT");
             esp_http_client_set_redirection(evt->client);
             break;
+        case HTTP_EVENT_ERROR: {
+            ESP_LOGI(TAG, "HTTP_EVENT_ERROR");
+
+            int mbedtls_err = 0;
+            esp_err_t err = esp_tls_get_and_clear_last_error((esp_tls_error_handle_t)evt->data,
+                                                             &mbedtls_err, NULL);
+            if (err != 0) {
+                ESP_LOGI(TAG, "Last esp error code: 0x%x", err);
+                ESP_LOGI(TAG, "Last mbedtls failure: 0x%x", mbedtls_err);
+            }
+        } break;
         default:
-            ESP_LOGI(TAG, "HTTP_EVENT %d", evt->event_id);
+            ESP_LOGD(TAG, "HTTP_EVENT %d", evt->event_id);
             break;
     }
     return ESP_OK;
 }
 std::string RestfulClient::Get(const std::string& url) {
+    // auto normalized_url = NormalizeUrl(url);
     auto url_str = url.c_str();
 
     std::string response;
     UserDataContext response_ctx = {&response, UserDataType::Data};
     esp_http_client_config_t config = {
         .url = url_str,  // 可换成你的 API
+        // .tls_version = ESP_HTTP_CLIENT_TLS_VER_TLS_1_2,
         .timeout_ms = MAX_HTTP_TIMEOUT_MS,
         .max_redirection_count = 5,  // 最大重定向次数
         .event_handler = _http_event_handler,
@@ -77,23 +89,47 @@ std::string RestfulClient::Get(const std::string& url) {
         // .skip_cert_common_name_check = true,         // 跳过CN检查
         .crt_bundle_attach = esp_crt_bundle_attach,  // 启用内置根证书
     };
-    ESP_LOGI(TAG, "HTTP native request => %s", url_str);
+    ESP_LOGI(TAG, "HTTP GET request => %s", url_str);
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
 
-    esp_http_client_set_header(client, "User-Agent", USER_AGENT);
-    esp_http_client_set_header(client, "Accept", "*/*");
-
-
+    // esp_http_client_set_header(client, "User-Agent", USER_AGENT);
+    esp_http_client_set_header(client, "Accept",
+                               "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+    esp_http_client_set_header(client, "Accept-Language", "en-US,en;q=0.9");
+    // esp_http_client_set_header(client, "Accept-Encoding", "gzip, deflate");
+    esp_http_client_set_header(client, "Cache-Control", "no-cache");
+    esp_http_client_set_header(client, "DNT", "1");
 
     // GET
-    esp_err_t err = esp_http_client_perform(client);
+    esp_err_t err;
+    for (int attempt = 0; attempt < 6; attempt++) {
+        if (attempt > 0) {
+            char url_buf[256];
+            esp_http_client_get_url(client, url_buf, sizeof(url_buf) - 1);
+            ESP_LOGI(TAG, "Retry %d, URL: %s", attempt, url_buf);
+        }
+        err = esp_http_client_perform(client);
+        if (err == ESP_OK)
+            break;
+        ESP_LOGI(TAG, "perform result: %s", esp_err_to_name(err));
+        // 301/302 响应 body 使用 chunked 编码时，连接关闭会导致
+        // ESP_ERR_HTTP_INCOMPLETE_DATA/CONNECTION_CLOSED。
+        // 此时内部重定向已设置 process_again=1，重试即可跟随重定向。
+        if (err == ESP_ERR_HTTP_INCOMPLETE_DATA || err == ESP_ERR_HTTP_CONNECTION_CLOSED) {
+            ESP_LOGI(TAG, "Redirect retry %d/%d", attempt + 1, 5);
+            response.clear();
+            continue;
+        }
+        break;
+    }
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "HTTP GET Status = %d", esp_http_client_get_status_code(client));
     } else {
         ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
+        response.clear();
     }
-    ESP_LOGI(TAG, "HTTP GET response => %d", response.length());
+    ESP_LOGI(TAG, "HTTP GET response => %d bytes", response.size());
 
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
@@ -151,7 +187,8 @@ std::string RestfulClient::Post(const std::string& url, const std::string& body,
     return response;
 }
 
-void RestfulClient::TryGetRedirectUrl(const std::string& url, std::string& redirect_url, int max_redirects) {
+void RestfulClient::TryGetRedirectUrl(const std::string& url, std::string& redirect_url,
+                                      int max_redirects) {
     if (max_redirects <= 0) {
         ESP_LOGE(TAG, "Max redirects reached for URL: %s", url.c_str());
         return;

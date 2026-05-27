@@ -22,9 +22,9 @@ HttpStream::~HttpStream() {
 }
 
 esp_err_t HttpStream::http_event_handler(esp_http_client_event_t* evt) {
-    ESP_LOGI(TAG, "http_event_handler, event_id=%d", evt->event_id);
-    HttpStream* stream = static_cast<HttpStream*>(evt->user_data);
-     auto client = evt->client;
+    // ESP_LOGI(TAG, "http_event_handler, event_id=%d", evt->event_id);
+    auto stream = static_cast<HttpStream*>(evt->user_data);
+    // auto client = evt->client;
     switch (evt->event_id) {
         case HTTP_EVENT_ON_DATA: {
             DataChunk chunk;
@@ -67,15 +67,16 @@ esp_err_t HttpStream::http_event_handler(esp_http_client_event_t* evt) {
                 return err;  // Return error on abnormal disconnect
             }
         } break;
-        case HTTP_EVENT_ON_HEADER:
-            ESP_LOGI(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key,
-                     evt->header_value);
-                     // 处理 HTTP 重定向 (ESP-IDF 5.x 不支持自动重定向)
-            if (strcmp(evt->header_key, "Location") == 0) {
-                return ESP_FAIL;
-            }
+        // case HTTP_EVENT_ON_HEADER:
+        //     ESP_LOGD(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key,
+        //              evt->header_value);
+        //     break;
+        case HTTP_EVENT_REDIRECT:
+            ESP_LOGI(TAG, "HTTP_EVENT_REDIRECT");
+            esp_http_client_set_redirection(evt->client);
             break;
         default:
+            ESP_LOGI(TAG, "http_event_handler, event_id=%d", evt->event_id);
             break;
     }
     return ESP_OK;
@@ -105,6 +106,7 @@ void HttpStream::OpenTask(void* arg) {
 
     esp_http_client_config_t config = {.url = url_str,
                                        .timeout_ms = 10000,
+                                       .max_redirection_count = 5,
                                        .event_handler = http_event_handler,
                                        .user_data = stream,
                                        .crt_bundle_attach = esp_crt_bundle_attach};
@@ -116,7 +118,8 @@ void HttpStream::OpenTask(void* arg) {
     }
     auto client = stream->client_;
 
-    esp_http_client_set_header(client, "Accept", "audio/mpeg, audio/x-mpeg, audio/x-mpeg-3, audio/mpeg3");
+    esp_http_client_set_header(client, "Accept",
+                               "audio/mpeg, audio/x-mpeg, audio/x-mpeg-3, audio/mpeg3");
     esp_http_client_set_header(client, "Connection", "keep-alive");
     esp_http_client_set_header(client, "Accept-Encoding", "identity");
     esp_http_client_set_header(client, "Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
@@ -125,8 +128,19 @@ void HttpStream::OpenTask(void* arg) {
                                "Gecko) Chrome/148.0.0.0 Safari/537.36");
 
     ESP_LOGI(TAG, "OpenTask, perform request");
-    esp_err_t err = esp_http_client_perform(client);
-    
+    esp_err_t err;
+    for (int attempt = 0; attempt < 6; attempt++) {
+        err = esp_http_client_perform(client);
+        if (err == ESP_OK)
+            break;
+        if (err == ESP_ERR_HTTP_INCOMPLETE_DATA || err == ESP_ERR_HTTP_CONNECTION_CLOSED) {
+            ESP_LOGI(TAG, "Redirect retry %d/%d", attempt + 1, 5);
+            stream->ClearDataQueue();
+            continue;
+        }
+        break;
+    }
+
     ESP_LOGI(TAG, "OpenTask, perform request err=%d", err);
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "HTTP GET Status = %d", esp_http_client_get_status_code(client));
@@ -187,4 +201,12 @@ void HttpStream::SendData(DataChunk chunk) {
             delete[] chunk.data;
         }
     };
+}
+
+void HttpStream::ClearDataQueue() {
+    while (uxQueueMessagesWaiting(data_queue_) > 0) {
+        DataChunk chunk;
+        xQueueReceive(data_queue_, &chunk, portMAX_DELAY);
+        delete[] chunk.data;
+    }
 }

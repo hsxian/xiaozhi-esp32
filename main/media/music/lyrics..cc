@@ -60,7 +60,7 @@ bool Lyrics::Parse(const std::string& lrc_content) {
                         LyricsLine line;
                         line.time_ms = time_ms;
                         line.text = text;
-                        ESP_LOGI(TAG, "Parsed line: %s, time: %d", line.text.c_str(), line.time_ms);
+                        // ESP_LOGI(TAG, "Parsed line: %s, time: %d", line.text.c_str(), line.time_ms);
                         lines_.push_back(line);
                     }
                 }
@@ -99,7 +99,6 @@ bool Lyrics::GetLyricAtTime(int current_time_ms, std::string& out_lyric) {
     int target_index = -1;
     
     for (int i = 0; i < line_count; i++) {
-        ESP_LOGI(TAG, "Current time: %d, target time: %d", current_time_ms, lines_[i].time_ms);
         if (lines_[i].time_ms <= current_time_ms) {
             target_index = i;
         } else {
@@ -110,6 +109,7 @@ bool Lyrics::GetLyricAtTime(int current_time_ms, std::string& out_lyric) {
     if (target_index >= 0 && target_index < line_count) {
         out_lyric = lines_[target_index].text;
         current_line_index_ = target_index;
+        // ESP_LOGI(TAG, "Current time: %d, target index: %d", current_time_ms, target_index);
         return true;
     }
     

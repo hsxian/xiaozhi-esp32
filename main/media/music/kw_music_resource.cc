@@ -17,7 +17,7 @@ _Static_assert(sizeof(CONFIG_KW_MUSIC_ADDRESS) > 1, "CONFIG_KW_MUSIC_ADDRESS‰∏çË
 
 bool KwMusicResource::Search(const QueryBase& query, std::vector<Music>& music_list) {
     RestfulClient restful_client;
-    std::string keyword = restful_client.UrlEncode(query.keyword);
+    std::string keyword = query.keyword;// restful_client.UrlEncode(query.keyword);
     std::string url = std::format("{}?name={}&page={}&limit={}", CONFIG_KW_MUSIC_ADDRESS, keyword,
                                   query.page, query.page_size);
     ESP_LOGI(TAG, "url: %s", url.c_str());

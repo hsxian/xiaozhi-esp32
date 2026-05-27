@@ -27,14 +27,14 @@ class HttpStream {
 public:
     HttpStream();
     ~HttpStream();
-    bool Init(int timeout_ms);
     bool Open(const std::string& url);
+    void StopRequest();
     void ClearDataQueue();
+    QueueHandle_t& GetDataQueue();
+    int64_t GetContentLength() const;
 
 private:
-    static constexpr int MAX_CONSECUTIVE_SKIPS = 100;  // 跳过超过100次则停止该曲目
-    static constexpr int BUFFER_SIZE = 1 * 1024;      // 减小缓冲区到1KB，降低内存压力并减缓下载速度
-    static constexpr int PCM_BUFFER_SIZE = 8 * 1024;  // PCM输出缓冲区
+
     static constexpr int QUEUE_SIZE = 16;             // 队列大小
     static constexpr int HIGH_WATER_MARK = 8;         // 降低高水位标记，更早开始节流
     static constexpr int CRITICAL_WATER_MARK = 14;    // 临界水位，接近满队列
@@ -47,6 +47,7 @@ private:
     std::string url_str_;
     TaskHandle_t task_handle_{nullptr};
     QueueHandle_t data_queue_;  // MP3数据队列
+    int64_t content_length_{0};
     size_t download_bytes_received_{0};
     void SendError();
     void SendEos();

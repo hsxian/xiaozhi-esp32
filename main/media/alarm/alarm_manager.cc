@@ -605,6 +605,7 @@ void AlarmManager::UpdateTimerLocked() {
                                next_alarm.hour, next_alarm.minute, next_alarm.second, delay_str);
         auto msg_str = msg.c_str();
         display_->SetChatMessage("alarm", msg_str);
+        ESP_LOGI(TAG, "%s", msg_str);
     }
 }
 

@@ -95,6 +95,11 @@ bool HttpStream::Open(const std::string& url) {
         vTaskDelete(task_handle_);
         task_handle_ = nullptr;
     }
+    // 清理之前未释放的 client_
+    if (client_ != nullptr) {
+        esp_http_client_cleanup(client_);
+        client_ = nullptr;
+    }
     ESP_LOGI(TAG, "start OpenTask request => %s", url.c_str());
     xTaskCreate(OpenTask, "OpenTask", 8192, this, 2, &task_handle_);
     return true;
@@ -104,6 +109,8 @@ void HttpStream::StopRequest() {
     if (client_ != nullptr) {
         ESP_LOGI(TAG, "Force closing HTTP connection");
         esp_http_client_close(client_);
+        esp_http_client_cleanup(client_);
+        client_ = nullptr;
     }
     if (task_handle_ != nullptr) {
         vTaskDelete(task_handle_);
@@ -156,8 +163,10 @@ void HttpStream::OpenTask(void* arg) {
 
     ESP_LOGI(TAG, "OpenTask, perform request err=%d", err);
     if (err == ESP_OK) {
+        stream->SendEos();
         ESP_LOGI(TAG, "HTTP GET Status = %d", esp_http_client_get_status_code(client));
     } else {
+        stream->SendError();
         ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
     }
 

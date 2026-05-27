@@ -20,6 +20,7 @@
 #if CONFIG_ENABLE_ALARM
 #include "media/alarm/alarm_event_config.h"
 #include "media/alarm/alarm_manager.h"
+#include "media/common/http_stream.h"
 #endif
 
 #define TAG "Application"
@@ -27,20 +28,47 @@
 #define TEST 0
 
 #if TEST
+#include "media/common/restful_client.h"
 #include "media/music/mp3_music_player.h"
 void testNoNetwork() {
-    for (int i = 0; i < 5; i++) {
-        AlarmManager::GetInstance().AddAlarm(Alarm("alarm_" + std::to_string(i),
-                                                   "alarm_" + std::to_string(i) + "下班了", 17, 25,
-                                                   64, 30, RepeatMode::HOLIDAYS, 64));
-    }
+
+    time_t now = time(nullptr);
+    ESP_LOGI(TAG, "now=%ld", now);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    ESP_LOGI(TAG, "tm=%s", asctime(&tm));
+    // Alarm work_alarm("1", "1", 0, 3, 0, 80, RepeatMode::CUSTOM, 0b100000);
+    // AlarmManager::GetInstance().AddAlarm(work_alarm);
+    // Alarm work_alarm2("2", "2", 0, 2, 0, 80, RepeatMode::CUSTOM, 0b10000);
+    // AlarmManager::GetInstance().AddAlarm(work_alarm2);
+    // Alarm work_alarm3("3", "3", 0, 1, 0, 80, RepeatMode::CUSTOM, 0b10000);
+    // AlarmManager::GetInstance().AddAlarm(work_alarm3);
+    Alarm work_alarm4("4", "4", tm.tm_hour, tm.tm_min + 1, tm.tm_sec, 80, RepeatMode::ONCE);
+    AlarmManager::GetInstance().AddAlarm(work_alarm4);
 }
 void testOnNetwork() {
-    Music music;
-    music.name = "随机";
-    music.url = "http://music.163.com/song/media/outer/url?id=447925558.mp3";
-    auto mp = new Mp3MusicPlayer();
-    mp->Play(music);
+    xTaskCreate(
+        [](void* arg) {
+            vTaskDelay(pdMS_TO_TICKS(300));
+            RestfulClient restful_client;
+            // https://httpbin.org/get
+            // https://kw-api.cenguigui.cn/?id=22837479&type=lyr&format=all
+            //  std::string redirect_url;
+            //  restful_client.TryGetRedirectUrl("http://kw-api.cenguigui.cn/?id=22837479&type=lyr&format=all",
+            //                     redirect_url);
+            // auto response =
+            //     restful_client.Get("http://kw-api.cenguigui.cn/?id=22837479&type=lyr&format=all");
+            // ESP_LOGD(TAG, "response=%s", response.c_str());
+
+            auto* http_stream = new HttpStream();
+            auto hs = http_stream->Open(
+                "http://kw-api.cenguigui.cn?id=228908&type=song&level=exhigh&format=mp3");
+            ESP_LOGI(TAG, "HttpStream open=%d", hs);
+            vTaskDelay(pdMS_TO_TICKS(30000));
+            vTaskDelete(nullptr);
+        },
+        "http_task", 4096, nullptr, 5, nullptr);
+    vTaskDelay(pdMS_TO_TICKS(5000));
 }
 #endif
 
@@ -125,7 +153,7 @@ void Application::Initialize() {
     // Set network event callback for UI updates and network state handling
     board.SetNetworkEventCallback([this](NetworkEvent event, const std::string& data) {
         auto display = Board::GetInstance().GetDisplay();
-        
+
         switch (event) {
             case NetworkEvent::Scanning:
                 display->ShowNotification(Lang::Strings::SCANNING_WIFI, 30000);
@@ -184,17 +212,20 @@ void Application::Initialize() {
 
     // Update the status bar immediately to show the network state
     display->UpdateStatusBar(true);
-
-    #if CONFIG_ENABLE_ALARM
+    
+#if CONFIG_ENABLE_ALARM
     AlarmManager::GetInstance().Initialize();
-    #endif
+#endif
+#if TEST
+    testNoNetwork();
+#endif
 }
 
 void Application::Run() {
     // Set the priority of the main task to 10
     vTaskPrioritySet(nullptr, 10);
 
-    const EventBits_t ALL_EVENTS = 
+    const EventBits_t ALL_EVENTS =
         MAIN_EVENT_SCHEDULE |
         MAIN_EVENT_SEND_AUDIO |
         MAIN_EVENT_WAKE_WORD_DETECTED |
@@ -279,18 +310,18 @@ void Application::Run() {
             clock_ticks_++;
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
-        
+
             // Print debug info every 10 seconds
             if (clock_ticks_ % 10 == 0) {
                 SystemInfo::PrintHeapStats();
             }
         }
 
-        #if CONFIG_ENABLE_ALARM
+#if CONFIG_ENABLE_ALARM
         if (bits & MAIN_EVENT_ALARM_CLOCK_RINGING) {
             AlarmEventConfig::GetInstance().HandleAlarmRingingEvent(aborted_, protocol_);
         }
-        #endif
+#endif
     }
 }
 
@@ -307,10 +338,10 @@ void Application::HandleNetworkConnectedEvent() {
         }
 
         xTaskCreate([](void* arg) {
-            Application* app = static_cast<Application*>(arg);
-            app->ActivationTask();
-            app->activation_task_handle_ = nullptr;
-            vTaskDelete(NULL);
+                Application* app = static_cast<Application*>(arg);
+                app->ActivationTask();
+                app->activation_task_handle_ = nullptr;
+                vTaskDelete(NULL);
         }, "activation", 4096 * 2, this, 2, &activation_task_handle_);
     }
 
@@ -369,14 +400,14 @@ void Application::ActivationTask() {
     // Initialize the protocol
     InitializeProtocol();
 
-    #if CONFIG_ENABLE_ALARM
+#if CONFIG_ENABLE_ALARM
+#if !TEST
     AlarmManager::GetInstance().LoadHolidays();
-    #endif
-
-    #if TEST
+#endif
+#endif
+#if TEST
     testOnNetwork();
-    #endif
-
+#endif
     // Signal completion to main loop
     xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
 }
@@ -396,7 +427,7 @@ void Application::CheckAssetsVersion() {
         ESP_LOGW(TAG, "Assets partition is disabled for board %s", BOARD_NAME);
         return;
     }
-    
+
     Settings settings("assets", true);
     // Check if there is a new assets need to be downloaded
     std::string download_url = settings.GetString("download_url");
@@ -407,7 +438,7 @@ void Application::CheckAssetsVersion() {
         char message[256];
         snprintf(message, sizeof(message), Lang::Strings::FOUND_NEW_ASSETS, download_url.c_str());
         Alert(Lang::Strings::LOADING_ASSETS, message, "cloud_arrow_down", Lang::Sounds::OGG_UPGRADE);
-        
+
         // Wait for the audio service to be idle for 3 seconds
         vTaskDelay(pdMS_TO_TICKS(3000));
         SetDeviceState(kDeviceStateUpgrading);
@@ -415,12 +446,12 @@ void Application::CheckAssetsVersion() {
         display->SetChatMessage("system", Lang::Strings::PLEASE_WAIT);
 
         bool success = assets.Download(download_url, [this, display](int progress, size_t speed) -> void {
-            char buffer[32];
-            snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
-            Schedule([display, message = std::string(buffer)]() {
-                display->SetChatMessage("system", message.c_str());
+                char buffer[32];
+                snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
+                Schedule([display, message = std::string(buffer)]() {
+                    display->SetChatMessage("system", message.c_str());
+                });
             });
-        });
 
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -538,21 +569,21 @@ void Application::InitializeProtocol() {
         last_error_message_ = message;
         xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
     });
-    
+
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
         if (GetDeviceState() == kDeviceStateSpeaking) {
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
         }
     });
-    
+
     protocol_->OnAudioChannelOpened([this, codec, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
         if (protocol_->server_sample_rate() != codec->output_sample_rate()) {
             ESP_LOGW(TAG, "Server sample rate %d does not match device output sample rate %d, resampling may cause distortion",
-                protocol_->server_sample_rate(), codec->output_sample_rate());
+                     protocol_->server_sample_rate(), codec->output_sample_rate());
         }
     });
-    
+
     protocol_->OnAudioChannelClosed([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         Schedule([this]() {
@@ -561,7 +592,7 @@ void Application::InitializeProtocol() {
             SetDeviceState(kDeviceStateIdle);
         });
     });
-    
+
     protocol_->OnIncomingJson([this, display](const cJSON* root) {
         // Parse JSON data
         auto type = cJSON_GetObjectItem(root, "type");
@@ -639,8 +670,8 @@ void Application::InitializeProtocol() {
             ESP_LOGI(TAG, "Received custom message: %s", cJSON_PrintUnformatted(root));
             if (cJSON_IsObject(payload)) {
                 Schedule([this, display, payload_str = std::string(cJSON_PrintUnformatted(payload))]() {
-                    display->SetChatMessage("system", payload_str.c_str());
-                });
+                        display->SetChatMessage("system", payload_str.c_str());
+                    });
             } else {
                 ESP_LOGW(TAG, "Invalid custom message format: missing payload");
             }
@@ -649,7 +680,7 @@ void Application::InitializeProtocol() {
             ESP_LOGW(TAG, "Unknown message type: %s", type->valuestring);
         }
     });
-    
+
     protocol_->Start();
 }
 
@@ -676,7 +707,7 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
 
     for (const auto& digit : code) {
         auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
-            [digit](const digit_sound& ds) { return ds.digit == digit; });
+                               [digit](const digit_sound& ds) { return ds.digit == digit; });
         if (it != digit_sounds.end()) {
             audio_service_.PlaySound(it->sound);
         }
@@ -717,7 +748,7 @@ void Application::StopListening() {
 
 void Application::HandleToggleChatEvent() {
     auto state = GetDeviceState();
-    
+
     if (state == kDeviceStateActivating) {
         SetDeviceState(kDeviceStateIdle);
         return;
@@ -775,7 +806,7 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
 
 void Application::HandleStartListeningEvent() {
     auto state = GetDeviceState();
-    
+
     if (state == kDeviceStateActivating) {
         SetDeviceState(kDeviceStateIdle);
         return;
@@ -789,7 +820,7 @@ void Application::HandleStartListeningEvent() {
         ESP_LOGE(TAG, "Protocol not initialized");
         return;
     }
-    
+
     if (state == kDeviceStateIdle) {
         if (!protocol_->IsAudioChannelOpened()) {
             SetDeviceState(kDeviceStateConnecting);
@@ -808,7 +839,7 @@ void Application::HandleStartListeningEvent() {
 
 void Application::HandleStopListeningEvent() {
     auto state = GetDeviceState();
-    
+
     if (state == kDeviceStateAudioTesting) {
         audio_service_.EnableAudioTesting(false);
         SetDeviceState(kDeviceStateWifiConfiguring);
@@ -865,14 +896,14 @@ void Application::HandleWakeWordDetectedEvent() {
         // Restart the activation check if the wake word is detected during activation
         SetDeviceState(kDeviceStateIdle);
     }
-    #if CONFIG_ENABLE_ALARM
+#if CONFIG_ENABLE_ALARM
     else if (state == kDeviceStateAlarmClock) {
         if (AlarmEventConfig::GetInstance().HandleWakeWordDetected(wake_word, protocol_)) {
             SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop
                                                   : kListeningModeRealtime);
         }
     }
-    #endif
+#endif
 }
 
 void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
@@ -943,7 +974,7 @@ void Application::HandleStateChangedEvent() {
                 if (listening_mode_ == kListeningModeAutoStop) {
                     audio_service_.WaitForPlaybackQueueEmpty();
                 }
-                
+
                 // Send the start listening command
                 protocol_->SendStartListening(listening_mode_);
                 audio_service_.EnableVoiceProcessing(true);
@@ -956,7 +987,7 @@ void Application::HandleStateChangedEvent() {
             // Disable wake word detection in listening mode
             audio_service_.EnableWakeWordDetection(false);
 #endif
-            
+
             // Play popup sound after ResetDecoder (in EnableVoiceProcessing) has been called
             if (play_popup_on_listening_) {
                 play_popup_on_listening_ = false;
@@ -977,11 +1008,11 @@ void Application::HandleStateChangedEvent() {
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(false);
             break;
-        #if CONFIG_ENABLE_ALARM
+#if CONFIG_ENABLE_ALARM
         case kDeviceStateAlarmClock:
             AlarmEventConfig::GetInstance().SetDeviceState();
             break;
-        #endif
+#endif
 
         default:
             // Do nothing
@@ -1085,7 +1116,7 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
     }
 
     auto state = GetDeviceState();
-    
+
     if (state == kDeviceStateIdle) {
         audio_service_.EncodeWakeWord();
 
@@ -1103,7 +1134,7 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
         Schedule([this]() {
             AbortSpeaking(kAbortReasonNone);
         });
-    } else if (state == kDeviceStateListening) {   
+    } else if (state == kDeviceStateListening) {
         Schedule([this]() {
             if (protocol_) {
                 protocol_->CloseAudioChannel();
@@ -1151,18 +1182,18 @@ void Application::SetAecMode(AecMode mode) {
         auto& board = Board::GetInstance();
         auto display = board.GetDisplay();
         switch (aec_mode_) {
-        case kAecOff:
-            audio_service_.EnableDeviceAec(false);
-            display->ShowNotification(Lang::Strings::RTC_MODE_OFF);
-            break;
-        case kAecOnServerSide:
-            audio_service_.EnableDeviceAec(false);
-            display->ShowNotification(Lang::Strings::RTC_MODE_ON);
-            break;
-        case kAecOnDeviceSide:
-            audio_service_.EnableDeviceAec(true);
-            display->ShowNotification(Lang::Strings::RTC_MODE_ON);
-            break;
+            case kAecOff:
+                audio_service_.EnableDeviceAec(false);
+                display->ShowNotification(Lang::Strings::RTC_MODE_OFF);
+                break;
+            case kAecOnServerSide:
+                audio_service_.EnableDeviceAec(false);
+                display->ShowNotification(Lang::Strings::RTC_MODE_ON);
+                break;
+            case kAecOnDeviceSide:
+                audio_service_.EnableDeviceAec(true);
+                display->ShowNotification(Lang::Strings::RTC_MODE_ON);
+                break;
         }
 
         // If the AEC mode is changed, close the audio channel

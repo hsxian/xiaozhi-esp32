@@ -27,8 +27,8 @@ bool KwMusicResource::Search(const QueryBase& query, std::vector<Music>& music_l
     if (response.empty()) {
         return success;
     }
-    // StringHelper string_helper;
-    // response = string_helper.ReplaceStringAll(response, "http://", "https://");
+    StringHelper string_helper;
+    response = string_helper.ReplaceStringAll(response, "http://", "https://");
 
     auto json = cJSON_Parse(response.c_str());
     if (!json) {
@@ -58,10 +58,10 @@ std::string KwMusicResource::Search(const std::string& params) {
     ESP_LOGI(TAG, "url: %s", url.c_str());
 
     std::string response = restful_client.Get(url);
-    // if (!response.empty()) {
-    //     StringHelper string_helper;
-    //     response = string_helper.ReplaceStringAll(response, "http://", "https://");
-    // }
+    if (!response.empty()) {
+        StringHelper string_helper;
+        response = string_helper.ReplaceStringAll(response, "http://", "https://");
+    }
 
     return response;
 }

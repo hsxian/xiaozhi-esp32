@@ -8,6 +8,7 @@
 #include "alarm.h"
 
 class McpTool;
+class Display;
 
 // 闹钟回调函数类型
 using AlarmCallback = std::function<void(const Alarm& alarm)>;
@@ -117,4 +118,5 @@ private:
     mutable std::mutex mutex_;
     // 闹钟响起之前的系统音量
     int original_volume_;
+    Display* display_;
 };

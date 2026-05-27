@@ -56,13 +56,13 @@ bool AlarmEventConfig::HandleAlarmRingingEvent(bool& aborted, std::unique_ptr<Pr
         }
 
         auto now = time(NULL);
-        int ringing_seconds = 120;
+        int ringing_seconds = 180;
         int time_diff = difftime(now, current_alarm.start_ring_time);
         int start_volume = 30;
         auto& board = Board::GetInstance();
         auto audio_codec = board.GetAudioCodec();
         auto vol =
-            start_volume + time_diff * (current_alarm.volume - start_volume) / ringing_seconds;
+            start_volume + 2 * time_diff * (current_alarm.volume - start_volume) / ringing_seconds;
         vol = std::min(vol, (int)current_alarm.volume);
         if (time_diff % 3 == 0 && vol != audio_codec->output_volume()) {
             audio_codec->SetOutputVolume(vol);

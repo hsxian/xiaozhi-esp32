@@ -29,6 +29,7 @@ public:
     ~HttpStream();
     bool Init(int timeout_ms);
     bool Open(const std::string& url);
+    void ClearDataQueue();
 
 private:
     static constexpr int MAX_CONSECUTIVE_SKIPS = 100;  // 跳过超过100次则停止该曲目

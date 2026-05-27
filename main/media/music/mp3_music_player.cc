@@ -9,6 +9,7 @@
 #include "esp_wifi.h"
 #include "lyrics.h"
 #include "media/common/restful_client.h"
+#include "media/common/string_helper.h"
 #include "music_resource.h"
 
 extern "C" {
@@ -59,14 +60,14 @@ void Mp3MusicPlayer::DownloadLyrics(const Music& music) {
     is_downloading_lyrics_ = true;
 
     RestfulClient client(3);
-    std::string lyrics_url = client.NormalizeUrl(music.lrc);
-    client.TryGetRedirectUrl(lyrics_url, lyrics_url);
-    if (lyrics_url.empty()) {
-        ESP_LOGE(TAG, "Failed to download lyrics for music: %s", music.ToString().c_str());
-        is_downloading_lyrics_ = false;
-        return;
-    }
-    auto res = client.Get(lyrics_url);
+    // std::string lyrics_url = client.NormalizeUrl(music.lrc);
+    // client.TryGetRedirectUrl(lyrics_url, lyrics_url);
+    // if (lyrics_url.empty()) {
+    //     ESP_LOGE(TAG, "Failed to download lyrics for music: %s", music.ToString().c_str());
+    //     is_downloading_lyrics_ = false;
+    //     return;
+    // }
+    auto res = client.Get(music.lrc);
     if (res.empty()) {
         ESP_LOGE(TAG, "Failed to download lyrics for music: %s", music.ToString().c_str());
         is_downloading_lyrics_ = false;
@@ -84,14 +85,14 @@ void Mp3MusicPlayer::ShowLyrics() {
     }
     std::string line;
     auto line_index = lyrics_->GetCurrentLineIndex();
-    if (lyrics_->GetLyricAtTime(current_position_ms_, line)) {
+    if (!lyrics_->GetLyricAtTime(current_position_ms_, line)) {
         return;
     }
-    if (line_index == lyrics_->GetLineCount()) {
+    if (line_index == lyrics_->GetCurrentLineIndex()) {
         return;
     }
     auto str = line.c_str();
-    ESP_LOGI(TAG, "Show lyrics: %s", str);
+    // ESP_LOGI(TAG, "Show lyrics: %s", str);
     display_->SetChatMessage("music", str);
 }
 
@@ -854,9 +855,11 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t
     static time_t time_flag = time(nullptr);
 
     if (time(nullptr) - time_flag > 10) {
+        StringHelper sh;
         time_flag = time(nullptr);
-        ESP_LOGI(TAG, "Current position: %1f s, total duration: %1f s",
-                 current_position_ms_.load() / 1000.0f, total_duration_ms_.load() / 1000.0f);
+        ESP_LOGI(TAG, "Current position: %s, total duration: %s",
+                 sh.MillisecondToString(current_position_ms_.load()).c_str(),
+                 sh.MillisecondToString(total_duration_ms_.load()).c_str());
     }
 
     if (output_samples > 0) {

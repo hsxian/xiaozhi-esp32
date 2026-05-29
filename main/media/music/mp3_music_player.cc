@@ -8,8 +8,8 @@
 #include "display.h"
 #include "esp_wifi.h"
 #include "lyrics.h"
-#include "media/common/restful_client.h"
 #include "media/common/http_stream.h"
+#include "media/common/restful_client.h"
 #include "media/common/string_helper.h"
 #include "music_resource.h"
 
@@ -24,17 +24,20 @@ Mp3MusicPlayer::Mp3MusicPlayer()
       display_(Board::GetInstance().GetDisplay()),
       lyrics_(new Lyrics()),
       http_stream_(new HttpStream()) {
+    pause_ack_semaphore_ = xSemaphoreCreateBinary();
 
-    auto& state_machine = Application::GetInstance().GetStateMachine();
-    listener_id_ =
-        state_machine.AddStateChangeListener([this](DeviceState old_state, DeviceState new_state) {
-            this->OnStateMachineCallback(old_state, new_state);
-        });
+    wake_word_listener_id_ =
+        Application::GetInstance().BeforeHandleWakeWordEventListener().AddEventListener(
+            [this](void* data) { return this->OnWakeWordDetected(data); });
 }
 
 Mp3MusicPlayer::~Mp3MusicPlayer() {
-    auto& state_machine = Application::GetInstance().GetStateMachine();
-    state_machine.RemoveStateChangeListener(listener_id_);
+    if (pause_ack_semaphore_) {
+        vSemaphoreDelete(pause_ack_semaphore_);
+        pause_ack_semaphore_ = nullptr;
+    }
+    Application::GetInstance().BeforeHandleWakeWordEventListener().RemoveEventListener(
+        wake_word_listener_id_);
     CleanupResources();
     delete lyrics_;
     lyrics_ = nullptr;
@@ -107,15 +110,15 @@ void Mp3MusicPlayer::Play(const std::vector<Music>& music_list) {
     current_track_index_ = 0;
 
     // 创建解码播放线程
-    xTaskCreate(DecodePlayTask, "mp3_decode_task", 8192, this, 5, &decode_task_handle_);
+    xTaskCreate(PlayMusicTask, "mp3_decode_task", 8192, this, 5, &decode_task_handle_);
 
     ESP_LOGI(TAG, "Started playing MP3 %d tracks", current_music_list_.size());
 }
 
 // 解码播放线程
-void Mp3MusicPlayer::DecodePlayTask(void* arg) {
+void Mp3MusicPlayer::PlayMusicTask(void* arg) {
     auto* player = static_cast<Mp3MusicPlayer*>(arg);
-    player->DecodePlayLoop();
+    player->PlayMusicLoop();
     vTaskDelete(nullptr);
 }
 
@@ -156,15 +159,21 @@ bool Mp3MusicPlayer::ProcessReceivedChunk(DataChunk& chunk, std::vector<uint8_t>
 
     return true;
 }
-
-void Mp3MusicPlayer::DecodePlayLoop() {
+void Mp3MusicPlayer::PreparePlayState() {
     auto& app = Application::GetInstance();
-    auto& board = Board::GetInstance();
     auto& audio_service = app.GetAudioService();
-    auto& mp3_queue = http_stream_->GetDataQueue();
+    // 等待播放状态
+    while (IsNeedWaitDeviceState()) {
+        audio_service.UpdateLastOutputTime();
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    auto& board = Board::GetInstance();
+    board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+}
 
-    current_control_mode_ = MusicPlayer::PlayControlMode::kControlHandled;
-    
+void Mp3MusicPlayer::PlayMusicLoop() {
+    current_control_mode_ = PlayControlMode::kControlHandled;
+
     while (is_playing_) {
         // 检查曲目索引
         if (current_track_index_ < 0 ||
@@ -173,161 +182,17 @@ void Mp3MusicPlayer::DecodePlayLoop() {
             break;
         }
 
+        PreparePlayState();
+
         const auto& music = current_music_list_[current_track_index_];
         ESP_LOGI(TAG, "Playing track %d/%d: %s", 1 + current_track_index_,
                  static_cast<int>(current_music_list_.size()), music.ToString().c_str());
 
         DownloadLyrics(music);
-        
-        http_stream_->Open(music.url);
 
-        display_->SetChatMessage("music", ("Playing: " + music.ToString()).c_str());
+        DecodePlayLoop(music);
 
-        audio_codec_->SetOutputVolume(std::max(10, audio_codec_->output_volume()));
-        audio_codec_->EnableOutput(true);
-
-        // 重置播放进度
-        ResetPlaybackProgress();
-
-        // 初始化解码器
-        auto decoder = MP3InitDecoder();
-        if (!decoder) {
-            ESP_LOGE(TAG, "Failed to initialize MP3 decoder");
-            audio_codec_->EnableOutput(false);
-            ESP_LOGI(TAG, "Decode: Waiting for data from queue...");
-            // 等待并处理EOS
-            DataChunk chunk;
-            while (xQueueReceive(mp3_queue, &chunk, portMAX_DELAY) == pdPASS && is_playing_) {
-                if (chunk.data)
-                    delete[] chunk.data;
-                if (chunk.status == DataStatus::kEos || chunk.status == DataStatus::kError)
-                    break;
-            }
-            continue;
-        }
-
-        std::vector<uint8_t> mp3_buffer(BUFFER_SIZE * 2);
-        std::vector<int16_t> pcm_buffer(PCM_BUFFER_SIZE / 2);
-        size_t mp3_data_offset = 0;
-        size_t mp3_data_size = 0;
-        int consecutive_skip_count = 0;
-        bool track_complete = false;
-        bool track_error = false;
-
-        ESP_LOGI(TAG, "Decode: Entering main decode loop");
-        int decode_loop_count = 0;
-        while (is_playing_ && !track_complete && !track_error) {
-            decode_loop_count++;
-           
-            // 检查控制命令
-            if (current_control_mode_ == MusicPlayer::PlayControlMode::kStop) {
-                ESP_LOGI(TAG, "Decode play stopped by user");
-                http_stream_->StopRequest();
-                break;
-            }
-            if (current_control_mode_ == MusicPlayer::PlayControlMode::kNext ||
-                current_control_mode_ == MusicPlayer::PlayControlMode::kPrevious) {
-                ESP_LOGI(TAG, "Track change requested");
-                http_stream_->StopRequest();
-                break;
-            }
-
-            // 检查暂停
-            if (is_paused_) {
-                // ESP_LOGI(TAG, "Paused, waiting for resume");
-                audio_service.UpdateLastOutputTime();
-                std::unique_lock<std::mutex> lock(mutex_);
-                auto waited = pause_cv_.wait_for(lock, std::chrono::milliseconds(1000), [this]() {
-                    return !is_paused_ ||
-                           current_control_mode_ == MusicPlayer::PlayControlMode::kStop;
-                });
-                // ESP_LOGI(TAG, "Resumed or stopped (waited=%d)", (int)waited);
-                continue;
-            }
-
-            // 等待播放状态
-            while (IsNeedWaitDeviceState()) {
-                audio_service.UpdateLastOutputTime();
-                vTaskDelay(pdMS_TO_TICKS(500));
-            }
-
-            // 从队列获取数据 - 使用较长超时时间确保能获取到数据
-            DataChunk chunk;
-            BaseType_t recv_result = xQueueReceive(mp3_queue, &chunk, pdMS_TO_TICKS(500));
-            if (recv_result == pdPASS) {
-                size_t prev_offset = mp3_data_offset;
-                size_t prev_size = mp3_data_size;
-                if (!ProcessReceivedChunk(chunk, mp3_buffer, mp3_data_offset, mp3_data_size,
-                                          track_complete, track_error, "Received")) {
-                    break;
-                }
-            } else {
-                // 队列超时，检查是否真的没有数据
-                static int wait_count = 0;
-                wait_count++;
-                UBaseType_t queue_count = uxQueueMessagesWaiting(mp3_queue);
-                if (queue_count > 0) {
-                    ESP_LOGW(TAG, "[DECODE] loop#%d queue has %d items but receive timed out! wait#%d",
-                             decode_loop_count, queue_count, wait_count);
-                } 
-                // else {
-                //     ESP_LOGD(TAG, "[DECODE] loop#%d queue empty, waiting... wait#%d",
-                //              decode_loop_count, wait_count);
-                // }
-                // 保持AudioPowerCheck活跃，即使队列为空也定期更新
-                audio_service.UpdateLastOutputTime();
-                // 缓冲区数据不足时继续等待，不要跳过
-                if (mp3_data_size < 512) {
-                    // ESP_LOGD(TAG, "Waiting for more data, buffered: %u",
-                    //          (unsigned int)mp3_data_size);
-                    continue;
-                }
-            }
-
-            audio_service.UpdateLastOutputTime();
-            if (false == audio_codec_->output_enabled()) {
-                audio_codec_->EnableOutput(true);
-                board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
-            }
-
-            // 解码播放循环：持续解码直到缓冲区数据不足
-            while (mp3_data_size >= 512 && is_playing_ && !is_paused_) {
-                if (!DecodeAndPlayFrame(decoder, mp3_buffer, mp3_data_offset, mp3_data_size,
-                                        pcm_buffer, consecutive_skip_count)) {
-                    ESP_LOGW(TAG, "Decode failed, skipping");
-                    break;
-                }
-
-                // 解码过程中尝试预取下一批数据，提高效率
-                DataChunk next_chunk;
-                if (xQueueReceive(mp3_queue, &next_chunk, 0) == pdPASS) {
-                    if (!ProcessReceivedChunk(next_chunk, mp3_buffer, mp3_data_offset,
-                                              mp3_data_size, track_complete, track_error,
-                                              "Prefetched")) {
-                        break;
-                    }
-                }
-            }
-        }
-
-        // 清理解码器
-        MP3FreeDecoder(decoder);
-        audio_codec_->EnableOutput(false);
-
-        // 清空队列中剩余数据
-        http_stream_->CleanDataQueue();
-
-        // 更新曲目索引
-        if (current_control_mode_ == MusicPlayer::PlayControlMode::kStop) {
-            display_->SetChatMessage("music", "Stop");
-            break;
-        } else if (current_control_mode_ == MusicPlayer::PlayControlMode::kControlHandled) {
-            current_track_index_++;
-            display_->SetChatMessage("music", "Next track");
-            TrySetControlModeToHandled(1);
-        } else {
-            TrySetControlModeToHandled(1);
-        }
+        HandleControlSignal();  // 处理可能的停止/下一曲命令
     }
 
     is_playing_ = false;
@@ -335,9 +200,123 @@ void Mp3MusicPlayer::DecodePlayLoop() {
     display_->SetChatMessage("music", "Stopped");
     ESP_LOGI(TAG, "Decode play task exiting");
 }
+void Mp3MusicPlayer::DecodePlayLoop(const Music& music) {
+    auto& app = Application::GetInstance();
+    auto& audio_service = app.GetAudioService();
+    auto& mp3_queue = http_stream_->GetDataQueue();
+
+    http_stream_->Open(music.url);
+
+    display_->SetChatMessage("music", ("Playing: " + music.ToString()).c_str());
+
+    audio_codec_->SetOutputVolume(std::max(10, audio_codec_->output_volume()));
+    audio_codec_->EnableOutput(true);
+
+    // 重置播放进度
+    ResetPlaybackProgress();
+
+    // 初始化解码器
+    auto decoder = MP3InitDecoder();
+    if (!decoder) {
+        ESP_LOGE(TAG, "Failed to initialize MP3 decoder");
+        audio_codec_->EnableOutput(false);
+        ESP_LOGI(TAG, "Decode: Waiting for data from queue...");
+        http_stream_->StopRequest();
+        return;
+    }
+
+    std::vector<uint8_t> mp3_buffer(BUFFER_SIZE * 2);
+    std::vector<int16_t> pcm_buffer(PCM_BUFFER_SIZE / 2);
+    size_t mp3_data_offset = 0;
+    size_t mp3_data_size = 0;
+    int consecutive_skip_count = 0;
+    bool track_complete = false;
+    bool track_error = false;
+
+    ESP_LOGI(TAG, "Decode: Entering main decode loop");
+    int decode_loop_count = 0;
+    while (is_playing_ && !track_complete && !track_error) {
+        decode_loop_count++;
+
+        // 检查控制命令
+        if (BreakDecodePlayLoop()) {
+            break;
+        }
+
+        // 检查暂停
+        if (is_paused_) {
+            // 通知 OnStateMachineCallback 解码线程已真正暂停
+            if (!pause_acknowledged_.exchange(true)) {
+                xSemaphoreGive(pause_ack_semaphore_);
+            }
+            audio_service.UpdateLastOutputTime();
+            std::unique_lock<std::mutex> lock(mutex_);
+            pause_cv_.wait_for(lock, std::chrono::milliseconds(1000), [this]() {
+                return !is_paused_ || current_control_mode_ == MusicPlayer::PlayControlMode::kStop;
+            });
+            continue;
+        }
+
+        // 从队列获取数据 - 使用较长超时时间确保能获取到数据
+        DataChunk chunk;
+        BaseType_t recv_result = xQueueReceive(mp3_queue, &chunk, pdMS_TO_TICKS(500));
+        if (recv_result == pdPASS) {
+            if (!ProcessReceivedChunk(chunk, mp3_buffer, mp3_data_offset, mp3_data_size,
+                                      track_complete, track_error, "Received")) {
+                break;
+            }
+        } else {
+            // 队列超时，检查是否真的没有数据
+            static int wait_count = 0;
+            wait_count++;
+            UBaseType_t queue_count = uxQueueMessagesWaiting(mp3_queue);
+            if (queue_count > 0) {
+                ESP_LOGW(TAG, "[DECODE] loop#%d queue has %d items but receive timed out! wait#%d",
+                         decode_loop_count, queue_count, wait_count);
+            }
+
+            // 保持AudioPowerCheck活跃，即使队列为空也定期更新
+            audio_service.UpdateLastOutputTime();
+            // 缓冲区数据不足时继续等待，不要跳过
+            if (mp3_data_size < 512) {
+                // ESP_LOGD(TAG, "Waiting for more data, buffered: %u",
+                //          (unsigned int)mp3_data_size);
+                continue;
+            }
+        }
+
+        audio_service.UpdateLastOutputTime();
+        if (false == audio_codec_->output_enabled()) {
+            audio_codec_->EnableOutput(true);
+        }
+
+        // 解码播放循环：持续解码直到缓冲区数据不足
+        while (mp3_data_size >= 512 && is_playing_ && !is_paused_) {
+            if (!DecodeAndPlayFrame(decoder, mp3_buffer, mp3_data_offset, mp3_data_size, pcm_buffer,
+                                    consecutive_skip_count)) {
+                ESP_LOGW(TAG, "Decode failed, skipping");
+                break;
+            }
+
+            // 解码过程中尝试预取下一批数据，提高效率
+            DataChunk next_chunk;
+            if (xQueueReceive(mp3_queue, &next_chunk, 0) == pdPASS) {
+                if (!ProcessReceivedChunk(next_chunk, mp3_buffer, mp3_data_offset, mp3_data_size,
+                                          track_complete, track_error, "Prefetched")) {
+                    break;
+                }
+            }
+        }
+    }
+
+    // 清理解码器
+    MP3FreeDecoder(decoder);
+    audio_codec_->EnableOutput(false);
+    // 清空队列中剩余数据
+    http_stream_->CleanDataQueue();
+}
 
 bool Mp3MusicPlayer::IsPlaying() const { return is_playing_; }
-
 
 void Mp3MusicPlayer::SkipId3Tag(std::vector<uint8_t>& mp3_buffer, size_t& mp3_data_size,
                                 size_t& mp3_data_offset) {
@@ -370,6 +349,10 @@ void Mp3MusicPlayer::CleanupResources() {
     is_playing_ = false;
     is_paused_ = false;
     pause_cv_.notify_all();
+    // 释放信号量，防止 OnStateMachineCallback 死等
+    if (pause_ack_semaphore_) {
+        xSemaphoreGive(pause_ack_semaphore_);
+    }
 
     http_stream_->CleanDataQueue();
 
@@ -647,7 +630,6 @@ bool Mp3MusicPlayer::ChangePlayControlMode(const PlayControlMode& mode) {
     ESP_LOGI(TAG, "ChangePlayControlMode current_control_mode_ %d mode %d",
              (int)current_control_mode_.load(), (int)mode);
 
-    ResetHandledTaskListFlag();
     auto& app = Application::GetInstance();
     auto& board = Board::GetInstance();
     auto& audio_service = app.GetAudioService();
@@ -657,13 +639,15 @@ bool Mp3MusicPlayer::ChangePlayControlMode(const PlayControlMode& mode) {
             is_paused_ = true;
             break;
 
+        case PlayControlMode::kResume:
+            PreparePlayState();
         case PlayControlMode::kUnknown:
         case PlayControlMode::kControlHandled:
-        case PlayControlMode::kResume:
         case PlayControlMode::kStop:
         case PlayControlMode::kNext:
         case PlayControlMode::kPrevious:
             is_paused_ = false;
+            pause_acknowledged_ = false;
             pause_cv_.notify_all();
             break;
         default:
@@ -673,62 +657,68 @@ bool Mp3MusicPlayer::ChangePlayControlMode(const PlayControlMode& mode) {
     return ret;
 }
 
-void Mp3MusicPlayer::OnStateMachineCallback(DeviceState old_state, DeviceState new_state) {
-    if (!IsPlaying()) {
-        return;
+bool Mp3MusicPlayer::HandleControlSignal() {
+    if (current_control_mode_ == PlayControlMode::kStop) {
+        current_control_mode_ = PlayControlMode::kControlHandled;
+        ESP_LOGI(TAG, "Decode play stopped by user");
+        display_->SetChatMessage("music", "Stopped");
+        http_stream_->StopRequest();
+        is_playing_ = false;
+        return true;
     }
-
-    // ESP_LOGI(TAG, "OnStateMachineCallback old_state %d new_state %d", (int)old_state,
-    // (int)new_state);
-    if (old_state == kDeviceStateIdle) {
-        ESP_LOGI(TAG, "State changed from Idle during playback, pausing");
-        audio_codec_->EnableOutput(false);
-        ChangePlayControlMode(PlayControlMode::kPause);
-        audio_codec_->EnableOutput(true);
+    if (current_control_mode_ == PlayControlMode::kNext ||
+        current_control_mode_ == PlayControlMode::kControlHandled) {
+        current_control_mode_ = PlayControlMode::kControlHandled;
+        current_track_index_++;
+        display_->SetChatMessage("music", "Next music");
+        http_stream_->StopRequest();
+        return true;
     }
+    if (current_control_mode_ == PlayControlMode::kPrevious) {
+        current_control_mode_ = PlayControlMode::kControlHandled;
+        current_track_index_ = std::max(0, --current_track_index_);
+        display_->SetChatMessage("music", "Previous music");
+        http_stream_->StopRequest();
+        return true;
+    }
+    return false;
+}
+bool Mp3MusicPlayer::BreakDecodePlayLoop() {
+    return current_control_mode_ == PlayControlMode::kStop ||
+           current_control_mode_ == PlayControlMode::kNext ||
+           current_control_mode_ == PlayControlMode::kPrevious;
 }
 
-bool Mp3MusicPlayer::TrySetControlModeToHandled(int task_flag) {
-    if (current_control_mode_ == PlayControlMode::kControlHandled) {
+bool Mp3MusicPlayer::OnWakeWordDetected(void* data) {
+    auto& app = Application::GetInstance();
+    auto state = app.GetDeviceState();
+    if (state != kDeviceStateIdle) {
         return false;
     }
-    handled_task_list_flag_ |= task_flag;
-    int count = 0;
-    const int MAX_WAIT_COUNT = 100;  // 5秒超时
-    while (handled_task_list_flag_.load() != TASK_LIST_FLAG) {
-        vTaskDelay(pdMS_TO_TICKS(50));
-        count++;
-        if (count >= MAX_WAIT_COUNT) {
-            ESP_LOGE(TAG, "TrySetControlModeToHandled timeout!");
-            return true;
-        }
-        if (count % 20 == 19) {
-            ESP_LOGW(TAG,
-                     "TrySetControlModeToHandled wait count %d , flag %d current_control_mode_ %d",
-                     count, task_flag, (int)current_control_mode_.load());
-        }
+    if (!IsPlaying()) {
+        return false;
     }
-    auto expected = PlayControlMode::kControlHandled;
-    if (!current_control_mode_.compare_exchange_strong(expected,
-                                                       PlayControlMode::kControlHandled)) {
-        return false;  // 已被其他任务设置
+    if (is_paused_) {
+        return false;
     }
-    current_control_mode_ = PlayControlMode::kControlHandled;
-    if (expected == PlayControlMode::kNext) {
-        current_track_index_++;
-        display_->SetChatMessage("music", "Next track");
-    } else if (expected == PlayControlMode::kPrevious) {
-        current_track_index_ = std::max(0, --current_track_index_);
-        display_->SetChatMessage("music", "Previous track");
-    }
-    ESP_LOGI(TAG, "TrySetControlModeToHandled current_control_mode to  kControlHandled");
-    return true;
-}
-void Mp3MusicPlayer::ResetHandledTaskListFlag() { handled_task_list_flag_ = 0; }
+    ChangePlayControlMode(PlayControlMode::kPause);
 
-void Mp3MusicPlayer::WaitPalySattus() {
-    while (current_control_mode_ != PlayControlMode::kControlHandled &&
-           current_control_mode_ != PlayControlMode::kUnknown) {
-        vTaskDelay(pdMS_TO_TICKS(300));
+    // 重置确认标志，等待解码线程真正进入暂停状态
+    pause_acknowledged_ = false;
+    if (pause_ack_semaphore_) {
+        xSemaphoreTake(pause_ack_semaphore_, pdMS_TO_TICKS(1000));
     }
+    ESP_LOGI(TAG, "Wake word detected, pausing music");
+
+    xTaskCreate(
+        [](void* pvParameters) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            auto& app = Application::GetInstance();
+            app.ClearEventFromGroup(MAIN_EVENT_WAKE_WORD_DETECTED);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            app.AppendEventToGroup(MAIN_EVENT_WAKE_WORD_DETECTED);
+            vTaskDelete(nullptr);
+        },
+        "OnWakeWordDetectedTask", 2048, this, 5, nullptr);
+    return true;
 }

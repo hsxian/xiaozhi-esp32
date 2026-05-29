@@ -43,7 +43,8 @@ void testNoNetwork() {
     // AlarmManager::GetInstance().AddAlarm(work_alarm2);
     // Alarm work_alarm3("3", "3", 0, 1, 0, 80, RepeatMode::CUSTOM, 0b10000);
     // AlarmManager::GetInstance().AddAlarm(work_alarm3);
-    Alarm work_alarm4("4", "4", tm.tm_hour, tm.tm_min + 1, tm.tm_sec, 80, RepeatMode::ONCE);
+    Alarm work_alarm4("4", "4", tm.tm_hour, tm.tm_min, tm.tm_sec + 30, 80, RepeatMode::ONCE);
+    work_alarm4.snooze_duration = 1;
     AlarmManager::GetInstance().AddAlarm(work_alarm4);
 }
 void testOnNetwork() {
@@ -877,6 +878,15 @@ void Application::HandleWakeWordDetectedEvent() {
     if (!protocol_) {
         return;
     }
+
+    auto listeners = before_handle_wake_word_event_listener_.GetListeners();
+    for (auto &listener : listeners)
+    {
+        if (listener && listener(nullptr)) {
+            return;
+        }
+    }
+    
 
     auto state = GetDeviceState();
     auto wake_word = audio_service_.GetLastWakeWord();

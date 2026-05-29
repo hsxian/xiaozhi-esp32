@@ -40,8 +40,9 @@ private:
                               const char* log_tag = "Received");
     
     // 解码播放线程函数
-    static void DecodePlayTask(void* arg);
-    void DecodePlayLoop();
+    static void PlayMusicTask(void* arg);
+    void PlayMusicLoop();
+    void DecodePlayLoop(const Music&music);
     
     // 播放控制函数
     void SkipId3Tag(std::vector<uint8_t>& mp3_buffer, size_t& mp3_data_size, size_t& mp3_data_offset);
@@ -57,14 +58,16 @@ private:
     bool CanChangePlayControlMode(const PlayControlMode& mode);
     // 清理资源
     void CleanupResources();
-    void OnStateMachineCallback(DeviceState old_state, DeviceState new_state);
+    bool OnWakeWordDetected(void* data);
     
-    bool TrySetControlModeToHandled(int task_flag);
-    void ResetHandledTaskListFlag();
-    void WaitPalySattus();  // 是否需要等待播放状态
     void UpdateTimeInfo(int codec_output_rate, int output_samples, int output_channels,const MP3FrameInfo& frame_info);
     void DownloadLyrics(const Music& music);
     void ShowLyrics();
+    bool HandleControlSignal();
+    bool BreakDecodePlayLoop();
+
+    //准备播放的状态
+    void PreparePlayState();
 
     static constexpr int MAX_CONSECUTIVE_SKIPS = 100;  // 跳过超过100次则停止该曲目
     static constexpr int BUFFER_SIZE = 1 * 1024;       // 减小缓冲区到1KB，降低内存压力并减缓下载速度
@@ -72,7 +75,6 @@ private:
     static constexpr int QUEUE_SIZE = 16;              // 队列大小
     static constexpr int HIGH_WATER_MARK = 8;          // 降低高水位标记，更早开始节流
     static constexpr int CRITICAL_WATER_MARK = 14;     // 临界水位，接近满队列
-    static constexpr int TASK_LIST_FLAG = 0b01;        // 任务列表标志位
 
     AudioCodec* audio_codec_{nullptr};
     Display* display_{nullptr};
@@ -93,5 +95,9 @@ private:
     std::atomic<int> handled_task_list_flag_{0};
     std::string current_url_;
     size_t download_bytes_received_{0};
-    int listener_id_{-1};
+    int wake_word_listener_id_{-1};
+
+    // 暂停确认：OnStateMachineCallback 等待解码线程真正暂停
+    std::atomic<bool> pause_acknowledged_{false};
+    SemaphoreHandle_t pause_ack_semaphore_{nullptr};
 };

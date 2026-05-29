@@ -47,9 +47,8 @@ struct Alarm {
     // 转换为JSON字符串
     std::string ToJson() const;
     void ToJson(cJSON* root) const;
-    static std::string ToJsonArray(std::vector<Alarm>& alarms);
-    static bool findByName(std::vector<Alarm>& alarms, const std::string& name,
-                           std::vector<Alarm>& found_alarms);
+    static std::string ToJsonArray(std::vector<Alarm*>& alarms);
+    static std::vector<Alarm*> findByName(std::vector<Alarm*>& alarms, const std::string& name);
 
     // 从JSON字符串解析
     bool FromJson(const std::string& json);

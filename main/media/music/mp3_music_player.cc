@@ -54,14 +54,9 @@ void Mp3MusicPlayer::DownloadLyrics(const Music& music) {
     }
     is_downloading_lyrics_ = true;
 
-    RestfulClient client(3);
-    // std::string lyrics_url = client.NormalizeUrl(music.lrc);
-    // client.TryGetRedirectUrl(lyrics_url, lyrics_url);
-    // if (lyrics_url.empty()) {
-    //     ESP_LOGE(TAG, "Failed to download lyrics for music: %s", music.ToString().c_str());
-    //     is_downloading_lyrics_ = false;
-    //     return;
-    // }
+    lyrics_->Clear();
+
+    RestfulClient client;
     auto res = client.Get(music.lrc);
     if (res.empty()) {
         ESP_LOGE(TAG, "Failed to download lyrics for music: %s", music.ToString().c_str());
@@ -156,14 +151,15 @@ bool Mp3MusicPlayer::ProcessReceivedChunk(DataChunk& chunk, std::vector<uint8_t>
     mp3_data_size += chunk.size;
     delete[] chunk.data;
 
-    ESP_LOGD(TAG, "%s %d bytes, total buffered: %u", log_tag, (int)chunk.size,
-             (unsigned int)mp3_data_size);
+    // ESP_LOGD(TAG, "%s %d bytes, total buffered: %u", log_tag, (int)chunk.size,
+    //          (unsigned int)mp3_data_size);
 
     return true;
 }
 
 void Mp3MusicPlayer::DecodePlayLoop() {
     auto& app = Application::GetInstance();
+    auto& board = Board::GetInstance();
     auto& audio_service = app.GetAudioService();
     auto& mp3_queue = http_stream_->GetDataQueue();
 
@@ -222,19 +218,7 @@ void Mp3MusicPlayer::DecodePlayLoop() {
         int decode_loop_count = 0;
         while (is_playing_ && !track_complete && !track_error) {
             decode_loop_count++;
-            // 检查暂停
-            if (is_paused_) {
-                ESP_LOGI(TAG, "Paused, waiting for resume");
-                audio_service.UpdateLastOutputTime();
-                std::unique_lock<std::mutex> lock(mutex_);
-                auto waited = pause_cv_.wait_for(lock, std::chrono::milliseconds(1000), [this]() {
-                    return !is_paused_ ||
-                           current_control_mode_ == MusicPlayer::PlayControlMode::kStop;
-                });
-                audio_service.UpdateLastOutputTime();
-                ESP_LOGI(TAG, "Resumed or stopped (waited=%d)", (int)waited);
-            }
-
+           
             // 检查控制命令
             if (current_control_mode_ == MusicPlayer::PlayControlMode::kStop) {
                 ESP_LOGI(TAG, "Decode play stopped by user");
@@ -248,8 +232,21 @@ void Mp3MusicPlayer::DecodePlayLoop() {
                 break;
             }
 
+            // 检查暂停
+            if (is_paused_) {
+                // ESP_LOGI(TAG, "Paused, waiting for resume");
+                audio_service.UpdateLastOutputTime();
+                std::unique_lock<std::mutex> lock(mutex_);
+                auto waited = pause_cv_.wait_for(lock, std::chrono::milliseconds(1000), [this]() {
+                    return !is_paused_ ||
+                           current_control_mode_ == MusicPlayer::PlayControlMode::kStop;
+                });
+                // ESP_LOGI(TAG, "Resumed or stopped (waited=%d)", (int)waited);
+                continue;
+            }
+
             // 等待播放状态
-            while (IsNeedWaitDeviceSattus()) {
+            while (IsNeedWaitDeviceState()) {
                 audio_service.UpdateLastOutputTime();
                 vTaskDelay(pdMS_TO_TICKS(500));
             }
@@ -264,10 +261,6 @@ void Mp3MusicPlayer::DecodePlayLoop() {
                                           track_complete, track_error, "Received")) {
                     break;
                 }
-                ESP_LOGD(TAG, "[DECODE] loop#%d recv sz=%d buf_sz=%d->%d",
-                         decode_loop_count, (int)chunk.size,
-                         (int)(prev_offset + prev_size),
-                         (int)(mp3_data_offset + mp3_data_size));
             } else {
                 // 队列超时，检查是否真的没有数据
                 static int wait_count = 0;
@@ -276,16 +269,17 @@ void Mp3MusicPlayer::DecodePlayLoop() {
                 if (queue_count > 0) {
                     ESP_LOGW(TAG, "[DECODE] loop#%d queue has %d items but receive timed out! wait#%d",
                              decode_loop_count, queue_count, wait_count);
-                } else {
-                    ESP_LOGD(TAG, "[DECODE] loop#%d queue empty, waiting... wait#%d",
-                             decode_loop_count, wait_count);
-                }
+                } 
+                // else {
+                //     ESP_LOGD(TAG, "[DECODE] loop#%d queue empty, waiting... wait#%d",
+                //              decode_loop_count, wait_count);
+                // }
                 // 保持AudioPowerCheck活跃，即使队列为空也定期更新
                 audio_service.UpdateLastOutputTime();
                 // 缓冲区数据不足时继续等待，不要跳过
                 if (mp3_data_size < 512) {
-                    ESP_LOGD(TAG, "Waiting for more data, buffered: %u",
-                             (unsigned int)mp3_data_size);
+                    // ESP_LOGD(TAG, "Waiting for more data, buffered: %u",
+                    //          (unsigned int)mp3_data_size);
                     continue;
                 }
             }
@@ -293,6 +287,7 @@ void Mp3MusicPlayer::DecodePlayLoop() {
             audio_service.UpdateLastOutputTime();
             if (false == audio_codec_->output_enabled()) {
                 audio_codec_->EnableOutput(true);
+                board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
             }
 
             // 解码播放循环：持续解码直到缓冲区数据不足
@@ -320,7 +315,7 @@ void Mp3MusicPlayer::DecodePlayLoop() {
         audio_codec_->EnableOutput(false);
 
         // 清空队列中剩余数据
-        http_stream_->ClearDataQueue();
+        http_stream_->CleanDataQueue();
 
         // 更新曲目索引
         if (current_control_mode_ == MusicPlayer::PlayControlMode::kStop) {
@@ -376,7 +371,7 @@ void Mp3MusicPlayer::CleanupResources() {
     is_paused_ = false;
     pause_cv_.notify_all();
 
-    http_stream_->ClearDataQueue();
+    http_stream_->CleanDataQueue();
 
     if (decode_task_handle_) {
         vTaskDelete(decode_task_handle_);
@@ -419,8 +414,8 @@ void Mp3MusicPlayer::ConvertPcmIfNeeded(const MP3FrameInfo& frame_info,
 
     output_samples = output_frames * output_channels;
     output_pcm.resize(output_samples);
-    ESP_LOGD(TAG, "Resampling/downmixing %dHz %d-ch -> %dHz %d-ch", input_rate, input_channels,
-             codec_output_rate, codec_output_channels);
+    // ESP_LOGD(TAG, "Resampling/downmixing %dHz %d-ch -> %dHz %d-ch", input_rate, input_channels,
+    //          codec_output_rate, codec_output_channels);
 
     uint64_t step =
         need_rate_conversion ? (((uint64_t)input_rate << 32) / codec_output_rate) : (1ull << 32);
@@ -513,8 +508,8 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t
     // MP3帧最小约为24字节（帧头4字节 + 最小数据），要求至少有128字节确保有完整帧
     const int MIN_FRAME_SIZE = 128;
     if (mp3_data_size < MIN_FRAME_SIZE) {
-        ESP_LOGD(TAG, "Not enough data to decode (size: %u, need: %d), waiting for more",
-                 (unsigned int)mp3_data_size, MIN_FRAME_SIZE);
+        // ESP_LOGD(TAG, "Not enough data to decode (size: %u, need: %d), waiting for more",
+        //          (unsigned int)mp3_data_size, MIN_FRAME_SIZE);
         return true;
     }
 
@@ -524,8 +519,8 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t
 
     if (samples_decoded < 0) {
         if (samples_decoded == ERR_MP3_INDATA_UNDERFLOW) {
-            ESP_LOGD(TAG, "Need more data for MP3 decoding, current buffered: %u",
-                     (unsigned int)mp3_data_size);
+            // ESP_LOGD(TAG, "Need more data for MP3 decoding, current buffered: %u",
+            //          (unsigned int)mp3_data_size);
             consecutive_skip_count = 0;
             return true;
         }
@@ -559,8 +554,8 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t
     int bytes_consumed = mp3_data_size - nBytesLeft;
     mp3_data_offset += bytes_consumed;
     mp3_data_size = nBytesLeft;
-    ESP_LOGD(TAG, "Decoded %d samples, consumed %d bytes, remaining: %u", frame_info.outputSamps,
-             bytes_consumed, (unsigned int)mp3_data_size);
+    // ESP_LOGD(TAG, "Decoded %d samples, consumed %d bytes, remaining: %u", frame_info.outputSamps,
+    //          bytes_consumed, (unsigned int)mp3_data_size);
 
     if (frame_info.outputSamps <= 0) {
         return true;
@@ -587,7 +582,7 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t
                  sh.MillisecondToString(total_duration_ms_.load()).c_str());
     }
 
-    if (output_samples > 0) {
+    if (output_samples > 0 && !is_paused_) {
         if (output_pcm.empty()) {
             audio_codec_->OutputData(pcm_buffer.data(), output_samples);
         } else {
@@ -597,11 +592,11 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t
         Application::GetInstance().GetAudioService().UpdateLastOutputTime();
     }
 
-    ESP_LOGD(TAG,
-             "Decoded %d samples, %d channels, bitrate: %d kbps, samplerate: %d -> output "
-             "%d samples, %d channels, %d Hz",
-             frame_info.outputSamps, frame_info.nChans, frame_info.bitrate / 1000,
-             frame_info.samprate, output_samples, output_channels, codec_output_rate);
+    // ESP_LOGD(TAG,
+    //          "Decoded %d samples, %d channels, bitrate: %d kbps, samplerate: %d -> output "
+    //          "%d samples, %d channels, %d Hz",
+    //          frame_info.outputSamps, frame_info.nChans, frame_info.bitrate / 1000,
+    //          frame_info.samprate, output_samples, output_channels, codec_output_rate);
 
     return true;
 }
@@ -653,6 +648,9 @@ bool Mp3MusicPlayer::ChangePlayControlMode(const PlayControlMode& mode) {
              (int)current_control_mode_.load(), (int)mode);
 
     ResetHandledTaskListFlag();
+    auto& app = Application::GetInstance();
+    auto& board = Board::GetInstance();
+    auto& audio_service = app.GetAudioService();
     auto ret = true;
     switch (mode) {
         case PlayControlMode::kPause:

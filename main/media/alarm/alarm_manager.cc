@@ -28,15 +28,18 @@ AlarmManager& AlarmManager::GetInstance() {
 }
 
 AlarmManager::AlarmManager()
-    : timer_handle_(nullptr), is_ringing_(false), display_(Board::GetInstance().GetDisplay()) {
-    CheckAlarms();
-}
+    : timer_handle_(nullptr), is_ringing_(false), display_(Board::GetInstance().GetDisplay()) {}
 
 AlarmManager::~AlarmManager() {
     if (timer_handle_) {
         esp_timer_stop(timer_handle_);
         esp_timer_delete(timer_handle_);
     }
+    for (auto& a : alarms_) {
+        delete a;
+    }
+    alarms_.clear();
+    current_ringing_alarm_ = nullptr;
 }
 
 void AlarmManager::Initialize() {
@@ -78,7 +81,8 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         "level ranging from 0 to 100. The scheduling logic is handled by the RepeatMode enum, "
         "which supports single occurrences (ONCE), daily repeats (DAILY), workday-only schedules "
         "(WORKDAYS), holidays (HOLIDAYS), or fully customized patterns (CUSTOM). For custom "
-        "setups, the repeat_daysinteger acts as a bitmask covering Sunday through Saturday, "
+        "setups, the repeat_days integer acts as a bitmask covering Sunday(0b0000001) through "
+        "Saturday(0b1000000), "
         "allowing users to select specific days of the week for the alarm to trigger.",
         PropertyList({Property("id", kPropertyTypeString), Property("name", kPropertyTypeString),
                       Property("hour", kPropertyTypeInteger, 0, 23),
@@ -108,11 +112,8 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         PropertyList({Property("name", kPropertyTypeString)}),
         [this](const PropertyList& properties) -> ReturnValue {
             std::string name = properties["name"].value<std::string>();
-            std::vector<Alarm> alarms;
-            if (Alarm::findByName(alarms_, name, alarms)) {
-                return Alarm::ToJsonArray(alarms);
-            }
-            return "";
+            std::vector<Alarm*> alarms_found = Alarm::findByName(alarms_, name);
+            return Alarm::ToJsonArray(alarms_found);
         });
     tools.push_back(tool);
     tool = new McpTool(
@@ -123,21 +124,18 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         PropertyList({Property("name", kPropertyTypeString)}),
         [this](const PropertyList& properties) -> ReturnValue {
             std::string name = properties["name"].value<std::string>();
-            std::vector<Alarm> alarms;
-            if (Alarm::findByName(alarms_, name, alarms)) {
-                for (const auto& alarm : alarms) {
-                    RemoveAlarm(alarm.id);
-                }
-                return Alarm::ToJsonArray(alarms);
+            std::vector<Alarm*> alarms_found = Alarm::findByName(alarms_, name);
+            for (const auto& alarm : alarms_found) {
+                RemoveAlarm(alarm->id);
             }
-            return "";
+            return Alarm::ToJsonArray(alarms_found);
         });
     tools.push_back(tool);
 }
 void AlarmManager::LoadAlarms() {
     alarms_.clear();
-    // alarms_.push_back(Alarm("default", "default", 0, 0, 10, 30));
-    // alarms_.push_back(Alarm("default2", "default2", 0, 0, 30, 30));
+    // alarms_.push_back(new Alarm("default", "default", 0, 0, 10, 30));
+    // alarms_.push_back(new Alarm("default2", "default2", 0, 0, 30, 30));
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open(RECORD_FILE_NAME, NVS_READONLY, &nvs_handle);
     if (err != ESP_OK) {
@@ -173,7 +171,7 @@ void AlarmManager::LoadAlarms() {
         if (!alarm.FromJson(json)) {
             continue;
         }
-        alarms_.push_back(alarm);
+        alarms_.push_back(new Alarm(alarm));
     }
 
     nvs_close(nvs_handle);
@@ -196,9 +194,9 @@ void AlarmManager::SaveAlarms() {
     }
 
     // 相对时间闹钟和一次性闹钟不保存
-    auto save_alarms = std::vector<Alarm>();
+    auto save_alarms = std::vector<Alarm*>();
     for (const auto& alarm : alarms_) {
-        if (alarm.repeat_mode == RepeatMode::ONCE) {
+        if (alarm->repeat_mode == RepeatMode::ONCE) {
             continue;
         }
         save_alarms.push_back(alarm);
@@ -214,9 +212,9 @@ void AlarmManager::SaveAlarms() {
 
     // 保存每个闹钟
     for (size_t i = 0; i < save_alarms.size(); i++) {
-        const Alarm& alarm = save_alarms[i];
+        const Alarm* alarm = save_alarms[i];
         char key[32];
-        auto json = alarm.ToJson();
+        auto json = alarm->ToJson();
         auto value = json.c_str();
 
         snprintf(key, sizeof(key), "alarm_%d", (int)i);
@@ -306,13 +304,13 @@ bool AlarmManager::AddAlarm(const Alarm& alarm) {
 
     // 检查ID是否已存在
     for (const auto& a : alarms_) {
-        if (a.id == alarm.id) {
+        if (a->id == alarm.id) {
             ESP_LOGW(TAG, "Alarm ID already exists: %s", alarm.id.c_str());
             return false;
         }
     }
 
-    alarms_.push_back(alarm);
+    alarms_.push_back(new Alarm(alarm));
     SaveAlarms();
     UpdateTimerLocked();
 
@@ -327,13 +325,17 @@ bool AlarmManager::RemoveAlarm(const std::string& alarm_id) {
 }
 bool AlarmManager::RemoveAlarmLocked(const std::string& alarm_id) {
     auto it = std::find_if(alarms_.begin(), alarms_.end(),
-                           [&](const Alarm& a) { return a.id == alarm_id; });
+                           [&](const Alarm* a) { return a->id == alarm_id; });
 
     if (it == alarms_.end()) {
         ESP_LOGW(TAG, "Alarm not found: %s", alarm_id.c_str());
         return false;
     }
 
+    if (*it == current_ringing_alarm_) {
+        current_ringing_alarm_ = nullptr;
+    }
+    delete *it;
     alarms_.erase(it);
     SaveAlarms();
     UpdateTimerLocked();
@@ -344,38 +346,38 @@ bool AlarmManager::RemoveAlarmLocked(const std::string& alarm_id) {
 
 bool AlarmManager::RemoveAllAlarms() {
     std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& a : alarms_) {
+        delete a;
+    }
     alarms_.clear();
     SaveAlarms();
     UpdateTimerLocked();
     return true;
 }
 
-std::vector<Alarm> AlarmManager::GetAlarms() const { return alarms_; }
+std::vector<Alarm*> AlarmManager::GetAlarms() const { return alarms_; }
 
-bool AlarmManager::GetAlarm(const std::string& alarm_id, Alarm& out_alarm) const {
+Alarm* AlarmManager::GetAlarm(const std::string& alarm_id) const {
     auto it = std::find_if(alarms_.begin(), alarms_.end(),
-                           [&](const Alarm& a) { return a.id == alarm_id; });
+                           [&](const Alarm* a) { return a->id == alarm_id; });
 
     if (it == alarms_.end()) {
-        return false;
+        return nullptr;
     }
 
-    out_alarm = *it;
-    return true;
+    return *it;
 }
 
 bool AlarmManager::UpdateAlarm(const Alarm& alarm) {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    auto it = std::find_if(alarms_.begin(), alarms_.end(),
-                           [&](const Alarm& a) { return a.id == alarm.id; });
-
-    if (it == alarms_.end()) {
+    auto* existing = GetAlarm(alarm.id);
+    if (!existing) {
         ESP_LOGW(TAG, "Alarm not found: %s", alarm.id.c_str());
         return false;
     }
 
-    *it = alarm;
+    *existing = alarm;
     SaveAlarms();
     UpdateTimerLocked();
 
@@ -387,15 +389,13 @@ bool AlarmManager::UpdateAlarm(const Alarm& alarm) {
 bool AlarmManager::SetAlarmEnabled(const std::string& alarm_id, bool enabled) {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    auto it = std::find_if(alarms_.begin(), alarms_.end(),
-                           [&](const Alarm& a) { return a.id == alarm_id; });
-
-    if (it == alarms_.end()) {
+    auto* alarm = GetAlarm(alarm_id);
+    if (!alarm) {
         ESP_LOGW(TAG, "Alarm not found: %s", alarm_id.c_str());
         return false;
     }
 
-    it->state = enabled ? AlarmState::ENABLED : AlarmState::DISABLED;
+    alarm->state = enabled ? AlarmState::ENABLED : AlarmState::DISABLED;
     SaveAlarms();
     UpdateTimerLocked();
 
@@ -406,21 +406,18 @@ bool AlarmManager::SetAlarmEnabled(const std::string& alarm_id, bool enabled) {
 void AlarmManager::StopRinging() {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    if (is_ringing_) {
+    if (is_ringing_ && current_ringing_alarm_) {
         is_ringing_ = false;
 
-        CallAlarmStopCallback(current_ringing_alarm_);
+        StopAlarmRinging(*current_ringing_alarm_);
 
         // 更新闹钟状态
-        auto it = std::find_if(alarms_.begin(), alarms_.end(),
-                               [&](const Alarm& a) { return a.id == current_ringing_alarm_.id; });
-        if (it != alarms_.end()) {
-            it->state = AlarmState::ENABLED;
-            if (it->repeat_mode == RepeatMode::ONCE) {
-                RemoveAlarmLocked(it->id);
-            }
+        current_ringing_alarm_->state = AlarmState::ENABLED;
+        if (current_ringing_alarm_->repeat_mode == RepeatMode::ONCE) {
+            RemoveAlarmLocked(current_ringing_alarm_->id);
         }
 
+        current_ringing_alarm_ = nullptr;
         UpdateTimerLocked();
         ESP_LOGI(TAG, "Alarm stopped");
     }
@@ -435,50 +432,39 @@ void AlarmManager::Snooze() {
 
     std::lock_guard<std::mutex> lock(mutex_);
 
-    if (!is_ringing_) {
+    if (!is_ringing_ || !current_ringing_alarm_) {
         ESP_LOGW(TAG, "No alarm is ringing");
         return;
     }
 
     // 检查贪睡次数
-    if (current_ringing_alarm_.snooze_count == 0) {
+    if (current_ringing_alarm_->snooze_count == 0) {
         ESP_LOGW(TAG, "Snooze count exceeded");
         StopRinging();
         return;
     }
 
     // 减少贪睡次数
-    if (current_ringing_alarm_.snooze_count > 0) {
-        current_ringing_alarm_.snooze_count--;
+    if (current_ringing_alarm_->snooze_count > 0) {
+        current_ringing_alarm_->snooze_count--;
     }
 
     // 停止当前响铃
     is_ringing_ = false;
 
-    CallAlarmStopCallback(current_ringing_alarm_);
+    StopAlarmRinging(*current_ringing_alarm_);
 
-    // 同步状态到 alarms_ 向量中的原始闹钟
-    auto it = std::find_if(alarms_.begin(), alarms_.end(),
-                           [&](const Alarm& a) { return a.id == current_ringing_alarm_.id; });
-    if (it != alarms_.end()) {
-        it->state = AlarmState::SNOOZED;
-        it->snooze_count = current_ringing_alarm_.snooze_count;
-    }
+    current_ringing_alarm_->state = AlarmState::SNOOZED;
 
     // 设置贪睡定时器
-    int64_t snooze_us = (int64_t)current_ringing_alarm_.snooze_duration * 60 * 1000000;
+    int64_t snooze_us = (int64_t)current_ringing_alarm_->snooze_duration * 60 * 1000000;
     esp_timer_stop(timer_handle_);
     esp_timer_start_once(timer_handle_, snooze_us);
 
-    auto msg = std::format("Alarm snoozed for {} minutes", current_ringing_alarm_.snooze_duration);
+    auto msg = std::format("Alarm snoozed for {} minutes", current_ringing_alarm_->snooze_duration);
     auto msg_str = msg.c_str();
+    ESP_LOGI(TAG, "%s", msg_str);
     display_->SetChatMessage("alarm", msg_str);
-}
-
-void AlarmManager::SetAlarmCallback(AlarmCallback callback) { alarm_callback_ = callback; }
-
-void AlarmManager::SetAlarmStopCallback(AlarmStopCallback callback) {
-    alarm_stop_callback_ = callback;
 }
 
 void AlarmManager::AddHoliday(const Holiday& holiday) { holidays_.push_back(holiday); }
@@ -510,7 +496,7 @@ bool AlarmManager::IsWorkday(int month, int day, int weekday) const {
     return true;
 }
 
-bool AlarmManager::ShouldRingAtTime(const time_t& now, const Alarm& alarm) const {
+bool AlarmManager::ShouldRingAtDate(const time_t& now, const Alarm& alarm) const {
     struct tm tm;
     localtime_r(&now, &tm);
     int weekday = tm.tm_wday;   // 0=周日, 1=周一, ..., 6=周六
@@ -543,7 +529,7 @@ bool AlarmManager::ShouldRingAtTime(const time_t& now, const Alarm& alarm) const
     // 打印repeat_days的二进制表示
     ESP_LOGD(
         TAG,
-        "ShouldRingAtTime ? %d, alarm time: %02d-%02d-%02d, weekday: %d, repeat mode: %d , repeat "
+        "ShouldRingAtDate ? %d, alarm time: %02d-%02d-%02d, weekday: %d, repeat mode: %d , repeat "
         "days: %d",
         ret, alarm.hour, alarm.minute, alarm.second, weekday, alarm.repeat_mode, alarm.repeat_days);
     return ret;
@@ -558,51 +544,57 @@ void AlarmManager::UpdateTimer() {
     std::lock_guard<std::mutex> lock(mutex_);
     UpdateTimerLocked();
 }
-
-void AlarmManager::UpdateTimerLocked() {
-    esp_timer_stop(timer_handle_);
-
+Alarm* AlarmManager::GetNextRingAtTime(const time_t& now, int64_t& next_ring_time) const {
+    Alarm* next_alarm = nullptr;
     int64_t min_delay = INT64_MAX;
-    Alarm next_alarm;
-    time_t original_now = time(nullptr);
     struct tm tm;
-    localtime_r(&original_now, &tm);
+    localtime_r(&now, &tm);
     int weekday = tm.tm_wday;   // 0=周日, 1=周一, ..., 6=周六
     int month = tm.tm_mon + 1;  // 1-12
     int day = tm.tm_mday;
-    ESP_LOGI(TAG, "today now: %ld, weekday: %d, month: %d, day: %d", ctime(&original_now), weekday,
-             month, day);
+    ESP_LOGI(TAG, "today now: %ld, weekday: %d, month: %d, day: %d", ctime(&now), weekday, month,
+             day);
 
     // 找到最早响铃的闹钟
     for (const auto& alarm : alarms_) {
-        if (alarm.state != AlarmState::ENABLED && alarm.state != AlarmState::SNOOZED) {
+        if (alarm->state != AlarmState::ENABLED && alarm->state != AlarmState::SNOOZED) {
             continue;
         }
-        ESP_LOGI(TAG, "alarm: %s(%d-%d-%d), repeat mode: %d, repeat days: %d", alarm.name.c_str(), alarm.hour, alarm.minute, alarm.second, alarm.repeat_mode, alarm.repeat_days);
+        ESP_LOGI(TAG, "alarm: %s(%d-%d-%d), repeat mode: %d, repeat days: %d", alarm->name.c_str(),
+                 alarm->hour, alarm->minute, alarm->second, alarm->repeat_mode, alarm->repeat_days);
         for (int i = 0; i < 7; i++) {
-            time_t check_time = original_now + i * 86400;
+            time_t check_time = now + i * 86400;
             // 检查今天是否应该响铃
-            if (!ShouldRingAtTime(check_time, alarm)) {
+            if (!ShouldRingAtDate(check_time, *alarm)) {
                 continue;
             }
 
-            auto alarm_time = alarm.toTime(check_time);
-            auto delay = difftime(alarm_time, original_now);
+            auto alarm_time = alarm->toTime(check_time);
+            auto delay = difftime(alarm_time, now);
             if (delay > 0 && delay < min_delay) {
                 min_delay = delay;
                 next_alarm = alarm;
             }
         }
     }
+    next_ring_time = min_delay;
+    return next_alarm;
+}
+
+void AlarmManager::UpdateTimerLocked() {
+    esp_timer_stop(timer_handle_);
+
+    int64_t min_delay = INT64_MAX;
+    time_t original_now = time(nullptr);
+    Alarm* next_alarm = GetNextRingAtTime(original_now, min_delay);
 
     // 如果有闹钟需要响铃，设置定时器
-    if (min_delay != INT64_MAX) {
-
+    if (next_alarm != nullptr) {
         StringHelper string_helper;
         auto delay_str = string_helper.MillisecondToString(min_delay * 1000);
         esp_timer_start_once(timer_handle_, min_delay * 1000000);
-        auto msg = std::format("Next alarm: {} at {}:{}:{} (after {})", next_alarm.name,
-                               next_alarm.hour, next_alarm.minute, next_alarm.second, delay_str);
+        auto msg = std::format("Next alarm: {} at {}:{}:{} (after {})", next_alarm->name.c_str(),
+                               next_alarm->hour, next_alarm->minute, next_alarm->second, delay_str);
         auto msg_str = msg.c_str();
         display_->SetChatMessage("alarm", msg_str);
         ESP_LOGI(TAG, "%s", msg_str);
@@ -620,44 +612,44 @@ void AlarmManager::OnAlarmTriggered() {
     time_t now = time(nullptr);
     struct tm tm;
     localtime_r(&now, &tm);
-
+    current_ringing_alarm_ = nullptr;
     // 找到应该响铃的闹钟
     for (auto& alarm : alarms_) {
-        if (alarm.state != AlarmState::ENABLED && alarm.state != AlarmState::SNOOZED) {
-            continue;
-        }
-
-        // 检查时间是否匹配（允许1秒误差）
-        if (abs(alarm.hour - tm.tm_hour) > 0 || abs(alarm.minute - tm.tm_min) > 0 ||
-            abs(alarm.second - tm.tm_sec) > 1) {
-            continue;
-        }
-
-        // 检查是否应该今天响铃
-        if (!ShouldRingAtTime(now, alarm)) {
+        if (alarm->state == AlarmState::SNOOZED) {
+            // 贪睡定时器触发，直接响铃
+        } else if (alarm->state == AlarmState::ENABLED) {
+            // 检查时间是否匹配（允许1秒误差）
+            if (abs(alarm->hour - tm.tm_hour) > 0 || abs(alarm->minute - tm.tm_min) > 0 ||
+                abs(alarm->second - tm.tm_sec) > 1) {
+                continue;
+            }
+            // 检查是否应该今天响铃
+            if (!ShouldRingAtDate(now, *alarm)) {
+                continue;
+            }
+        } else {
             continue;
         }
 
         // 设置为响铃状态
-        alarm.state = AlarmState::RINGING;
-        alarm.start_ring_time = now;
+        alarm->state = AlarmState::RINGING;
+        alarm->start_ring_time = now;
         current_ringing_alarm_ = alarm;
         is_ringing_ = true;
 
-        CallAlarmCallback(alarm);
+        RaiseAlarmRinging(*alarm);
 
-        auto msg = std::format("Alarm triggered: {} ({}:{}:{})", alarm.name, alarm.hour, alarm.minute, alarm.second);
+        auto msg = std::format("Alarm triggered: {} ({}:{}:{})", alarm->name, alarm->hour,
+                               alarm->minute, alarm->second);
         auto msg_str = msg.c_str();
+        ESP_LOGI(TAG, "%s", msg_str);
         display_->SetChatMessage("alarm", msg_str);
-        // 更新定时器（设置下一个闹钟）
-        UpdateTimerLocked();
     }
-
-    // 如果没有找到匹配的闹钟，更新定时器
-    UpdateTimerLocked();
-    ESP_LOGI(TAG, "No alarm triggered");
+    if (current_ringing_alarm_ == nullptr) {
+        ESP_LOGI(TAG, "No alarm triggered");
+    }
 }
-void AlarmManager::CallAlarmCallback(const Alarm& alarm) {
+void AlarmManager::RaiseAlarmRinging(const Alarm& alarm) {
     // 保存当前系统音量
     auto& board = Board::GetInstance();
     auto audio_codec = board.GetAudioCodec();
@@ -666,14 +658,13 @@ void AlarmManager::CallAlarmCallback(const Alarm& alarm) {
 
     auto& app = Application::GetInstance();
 
-    // 触发回调
-    if (alarm_callback_) {
-        alarm_callback_(alarm);
-    }
+
     app.AppendEventToGroup(MAIN_EVENT_ALARM_CLOCK_RINGING);
+
+    ESP_LOGI(TAG, "Alarm ringing: %s", alarm.name.c_str());
 }
 
-void AlarmManager::CallAlarmStopCallback(const Alarm& alarm) {
+void AlarmManager::StopAlarmRinging(const Alarm& alarm) {
     if (original_volume_ > 0) {
         auto& board = Board::GetInstance();
         auto audio_codec = board.GetAudioCodec();
@@ -682,16 +673,11 @@ void AlarmManager::CallAlarmStopCallback(const Alarm& alarm) {
 
     auto& app = Application::GetInstance();
 
-    if (alarm_stop_callback_) {
-        alarm_stop_callback_(alarm);
-    }
     app.ClearEventFromGroup(MAIN_EVENT_ALARM_CLOCK_RINGING);
+
+    ESP_LOGI(TAG, "Alarm stopped: %s", alarm.name.c_str());
 }
 
 bool AlarmManager::IsRinging() const { return is_ringing_; }
 
-void AlarmManager::GetCurrentRingingAlarm(Alarm& out_alarm) const {
-    out_alarm = current_ringing_alarm_;
-}
-
-void AlarmManager::CheckAlarms() {}
+Alarm* AlarmManager::GetCurrentRingingAlarm() const { return current_ringing_alarm_; }

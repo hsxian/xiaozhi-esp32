@@ -10,9 +10,6 @@
 class McpTool;
 class Display;
 
-// 闹钟回调函数类型
-using AlarmCallback = std::function<void(const Alarm& alarm)>;
-using AlarmStopCallback = std::function<void(const Alarm& alarm)>;
 
 // 闹钟管理器类
 class AlarmManager {
@@ -35,10 +32,10 @@ public:
     bool RemoveAllAlarms();
 
     // 获取所有闹钟
-    std::vector<Alarm> GetAlarms() const;
+    std::vector<Alarm*> GetAlarms() const;
 
     // 获取单个闹钟
-    bool GetAlarm(const std::string& alarm_id, Alarm& out_alarm) const;
+    Alarm* GetAlarm(const std::string& alarm_id) const;
 
     // 更新闹钟
     bool UpdateAlarm(const Alarm& alarm);
@@ -51,12 +48,6 @@ public:
 
     // 贪睡
     void Snooze();
-
-    // 设置闹钟触发回调
-    void SetAlarmCallback(AlarmCallback callback);
-
-    // 设置闹钟停止回调
-    void SetAlarmStopCallback(AlarmStopCallback callback);
 
     // 添加节假日
     void AddHoliday(const Holiday& holiday);
@@ -71,7 +62,8 @@ public:
     bool IsWorkday(int month, int day, int weekday) const;
 
     // 检查闹钟在指定时间点是否应该响铃
-    bool ShouldRingAtTime(const time_t& now, const Alarm& alarm) const;
+    bool ShouldRingAtDate(const time_t& now, const Alarm& alarm) const;
+    Alarm* GetNextRingAtTime(const time_t& now,  int64_t& next_ring_time) const;
 
     // 加载节假日配置
     void LoadHolidays();
@@ -81,7 +73,7 @@ public:
 
     bool IsRinging() const;
 
-    void GetCurrentRingingAlarm(Alarm& out_alarm) const;
+    Alarm* GetCurrentRingingAlarm() const;
 
 private:
     AlarmManager();
@@ -100,20 +92,16 @@ private:
     // 定时器回调函数
     static void TimerCallback(void* arg);
 
-    // 检查闹钟的后台任务
-    void CheckAlarms();
-
     // 闹钟触发处理
     void OnAlarmTriggered();
 
-    void CallAlarmCallback(const Alarm& alarm);
-    void CallAlarmStopCallback(const Alarm& alarm);
-    std::vector<Alarm> alarms_;
+    void RaiseAlarmRinging(const Alarm& alarm);
+    void StopAlarmRinging(const Alarm& alarm);
+
+    std::vector<Alarm*> alarms_;
     std::vector<Holiday> holidays_;
-    AlarmCallback alarm_callback_ = nullptr;
-    AlarmStopCallback alarm_stop_callback_ = nullptr;
     esp_timer_handle_t timer_handle_;
-    Alarm current_ringing_alarm_;
+    Alarm* current_ringing_alarm_{nullptr};
     bool is_ringing_;
     mutable std::mutex mutex_;
     // 闹钟响起之前的系统音量

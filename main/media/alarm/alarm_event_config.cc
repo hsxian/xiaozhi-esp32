@@ -26,8 +26,11 @@ bool AlarmEventConfig::HandleAlarmRingingEvent(bool& aborted, std::unique_ptr<Pr
     static bool to_clear_alarm_event = false;
     ESP_LOGD(TAG, "handle alarm ring event, device state %d", device_state);
     if (alram_manager.IsRinging()) {
-        Alarm current_alarm;
-        alram_manager.GetCurrentRingingAlarm(current_alarm);
+        auto current_alarm = alram_manager.GetCurrentRingingAlarm();
+        if (current_alarm == nullptr) {
+            ESP_LOGE(TAG, "Alarm ring, but no alarm found");
+            return false;
+        }
         if (device_state != kDeviceStateAlarmClock) {
             if (device_state == kDeviceStateActivating) {
                 ESP_LOGI(TAG, "Alarm ring, reboot");
@@ -51,19 +54,19 @@ bool AlarmEventConfig::HandleAlarmRingingEvent(bool& aborted, std::unique_ptr<Pr
             
             auto display = Board::GetInstance().GetDisplay();
 
-            display->SetChatMessage("system", current_alarm.name.c_str());
+            display->SetChatMessage("system", current_alarm->name.c_str());
             display->SetEmotion("neutral");
         }
 
         auto now = time(NULL);
-        int ringing_seconds = 180;
-        int time_diff = difftime(now, current_alarm.start_ring_time);
+        int ringing_seconds = 60 * 3;
+        int time_diff = difftime(now, current_alarm->start_ring_time);
         int start_volume = 30;
         auto& board = Board::GetInstance();
         auto audio_codec = board.GetAudioCodec();
         auto vol =
-            start_volume + 2 * time_diff * (current_alarm.volume - start_volume) / ringing_seconds;
-        vol = std::min(vol, (int)current_alarm.volume);
+            start_volume + 2 * time_diff * (current_alarm->volume - start_volume) / ringing_seconds;
+        vol = std::min(vol, (int)current_alarm->volume);
         if (time_diff % 3 == 0 && vol != audio_codec->output_volume()) {
             audio_codec->SetOutputVolume(vol);
         }

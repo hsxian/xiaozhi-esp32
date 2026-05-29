@@ -40,7 +40,8 @@ esp_err_t HttpStream::http_event_handler(esp_http_client_event_t* evt) {
             chunk.status = DataStatus::kNormal;
             stream->download_bytes_received_ += evt->data_len;
             stream->SendData(chunk);
-            // ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d, download_bytes_received=%d", evt->data_len,
+            // ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d, download_bytes_received=%d",
+            // evt->data_len,
             //          stream->download_bytes_received_);
 
         } break;
@@ -105,7 +106,6 @@ bool HttpStream::Open(const std::string& url) {
 }
 
 void HttpStream::StopRequest() {
-
     if (mutex_) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
     }
@@ -177,7 +177,8 @@ void HttpStream::OpenTask(void* arg) {
 
     stream->CleanClient();
     stream->task_handle_ = nullptr;
-    vTaskDelete(nullptr);  // 任务自己结束时删除自己，StopRequest 会通过判断 task_handle_ 来决定是否需要删除
+    vTaskDelete(
+        nullptr);  // 任务自己结束时删除自己，StopRequest 会通过判断 task_handle_ 来决定是否需要删除
 }
 
 void HttpStream::SendError() {
@@ -192,28 +193,26 @@ void HttpStream::SendEos() {
 }
 
 void HttpStream::SendData(DataChunk chunk) {
+    TickType_t timeout = pdMS_TO_TICKS(100);
     UBaseType_t queue_count = uxQueueMessagesWaiting(data_queue_);
-    // 当队列接近满时，使用较长的超时时间
-    TickType_t timeout;
-    if (queue_count >= CRITICAL_WATER_MARK) {
-        // 接近满队列时，等待更长时间让解码线程消费
+    if (queue_count >= QUEUE_SIZE) {
+        timeout = pdMS_TO_TICKS(5000);
+    } else if (queue_count >= CRITICAL_WATER_MARK) {
         timeout = pdMS_TO_TICKS(2000);
     } else if (queue_count >= HIGH_WATER_MARK) {
         timeout = pdMS_TO_TICKS(1000);
-    } else {
-        timeout = pdMS_TO_TICKS(100);
     }
 
-    BaseType_t send_result = xQueueSend(data_queue_, &chunk, timeout);  
+    BaseType_t send_result = xQueueSend(data_queue_, &chunk, timeout);
     if (send_result != pdPASS) {
         // 队列仍然满，改为阻塞式等待（不丢包）
         ESP_LOGW(TAG, "Queue full after %dms wait, blocking until space available",
                  timeout / portTICK_PERIOD_MS);
         // 使用 portMAX_DELAY 无限等待，直到队列有空间
-        if (xQueueSend(data_queue_, &chunk, portMAX_DELAY) != pdPASS) {
+        while (xQueueSend(data_queue_, &chunk, timeout) != pdPASS) {
             // 理论上不会到达这里，除非队列被删除
-            ESP_LOGE(TAG, "Failed to send chunk even with infinite wait!");
-            delete[] chunk.data;
+            ESP_LOGW(TAG, "Failed to send chunk even with infinite wait!");
+            vTaskDelay(timeout);
         }
     }
 }
@@ -226,12 +225,8 @@ void HttpStream::CleanDataQueue() {
         }
     }
 }
-QueueHandle_t& HttpStream::GetDataQueue() {
-    return data_queue_;
-}
-int64_t HttpStream::GetContentLength() const {
-    return content_length_;
-}
+QueueHandle_t& HttpStream::GetDataQueue() { return data_queue_; }
+int64_t HttpStream::GetContentLength() const { return content_length_; }
 
 void HttpStream::CleanClient() {
     if (client_ == nullptr) {

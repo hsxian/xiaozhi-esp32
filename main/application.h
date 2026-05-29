@@ -17,6 +17,7 @@
 #include "audio_service.h"
 #include "device_state.h"
 #include "device_state_machine.h"
+#include "media/common/event_listener.h"
 
 // Main event bits
 #define MAIN_EVENT_SCHEDULE             (1 << 0)
@@ -126,6 +127,8 @@ public:
 
     void AppendEventToGroup(EventBits_t event_bits);
     void ClearEventFromGroup(EventBits_t event_bits);
+    EventListener& BeforeHandleWakeWordEventListener() { return before_handle_wake_word_event_listener_; }
+
 
 private:
     Application();
@@ -151,6 +154,7 @@ private:
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
+    EventListener before_handle_wake_word_event_listener_;
 
 
     // Event handlers

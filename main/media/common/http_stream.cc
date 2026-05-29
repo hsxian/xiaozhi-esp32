@@ -12,12 +12,18 @@ HttpStream::HttpStream() {
     if (!data_queue_) {
         ESP_LOGE(TAG, "Failed to create data queue");
     }
+    mutex_ = xSemaphoreCreateMutex();
 }
 
 HttpStream::~HttpStream() {
+    StopRequest();
     if (data_queue_) {
         vQueueDelete(data_queue_);
         data_queue_ = nullptr;
+    }
+    if (mutex_) {
+        vSemaphoreDelete(mutex_);
+        mutex_ = nullptr;
     }
 }
 
@@ -34,8 +40,8 @@ esp_err_t HttpStream::http_event_handler(esp_http_client_event_t* evt) {
             chunk.status = DataStatus::kNormal;
             stream->download_bytes_received_ += evt->data_len;
             stream->SendData(chunk);
-            ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d, download_bytes_received=%d", evt->data_len,
-                     stream->download_bytes_received_);
+            // ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d, download_bytes_received=%d", evt->data_len,
+            //          stream->download_bytes_received_);
 
         } break;
         case HTTP_EVENT_ON_FINISH:
@@ -91,30 +97,29 @@ esp_err_t HttpStream::http_event_handler(esp_http_client_event_t* evt) {
 bool HttpStream::Open(const std::string& url) {
     url_str_ = url;
 
-    if (task_handle_ != nullptr) {
-        vTaskDelete(task_handle_);
-        task_handle_ = nullptr;
-    }
-    // 清理之前未释放的 client_
-    if (client_ != nullptr) {
-        esp_http_client_cleanup(client_);
-        client_ = nullptr;
-    }
+    StopRequest();
+
     ESP_LOGI(TAG, "start OpenTask request => %s", url.c_str());
     xTaskCreate(OpenTask, "OpenTask", 8192, this, 2, &task_handle_);
     return true;
 }
 
 void HttpStream::StopRequest() {
-    if (client_ != nullptr) {
-        ESP_LOGI(TAG, "Force closing HTTP connection");
-        esp_http_client_close(client_);
-        esp_http_client_cleanup(client_);
-        client_ = nullptr;
+
+    if (mutex_) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
     }
+
+    CleanClient();
+
     if (task_handle_ != nullptr) {
         vTaskDelete(task_handle_);
         task_handle_ = nullptr;
+    }
+    CleanDataQueue();
+
+    if (mutex_) {
+        xSemaphoreGive(mutex_);
     }
 }
 
@@ -155,7 +160,7 @@ void HttpStream::OpenTask(void* arg) {
             break;
         if (err == ESP_ERR_HTTP_INCOMPLETE_DATA || err == ESP_ERR_HTTP_CONNECTION_CLOSED) {
             ESP_LOGI(TAG, "Redirect retry %d/%d", attempt + 1, 5);
-            stream->ClearDataQueue();
+            stream->CleanDataQueue();
             continue;
         }
         break;
@@ -170,7 +175,9 @@ void HttpStream::OpenTask(void* arg) {
         ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
     }
 
-    vTaskDelete(NULL);  // Delete current task
+    stream->CleanClient();
+    stream->task_handle_ = nullptr;
+    vTaskDelete(nullptr);  // 任务自己结束时删除自己，StopRequest 会通过判断 task_handle_ 来决定是否需要删除
 }
 
 void HttpStream::SendError() {
@@ -186,28 +193,6 @@ void HttpStream::SendEos() {
 
 void HttpStream::SendData(DataChunk chunk) {
     UBaseType_t queue_count = uxQueueMessagesWaiting(data_queue_);
-
-    // 诊断日志：记录发送时的队列深度
-    static int send_count = 0;
-    static int throttle_count = 0;
-    send_count++;
-
-    // 智能流量控制：根据队列深度动态调整等待时间
-    // 当队列深度超过高水位时，主动等待解码线程消费
-    if (queue_count >= HIGH_WATER_MARK) {
-        throttle_count++;
-        // 等待时间与队列深度成正比，指数增长
-        int wait_ms = (queue_count - HIGH_WATER_MARK + 1) * 100;
-        ESP_LOGD(TAG, "[QDIAG] Qdeep (%d/%d) thr#%d (tot:%d ok:%d) wait%dms",
-                 queue_count, QUEUE_SIZE, throttle_count, send_count,
-                 send_count - throttle_count, wait_ms);
-        vTaskDelay(pdMS_TO_TICKS(wait_ms));
-
-        // 重新检查队列深度
-        queue_count = uxQueueMessagesWaiting(data_queue_);
-        ESP_LOGD(TAG, "[QDIAG] After throttle, queue depth=%d", queue_count);
-    }
-
     // 当队列接近满时，使用较长的超时时间
     TickType_t timeout;
     if (queue_count >= CRITICAL_WATER_MARK) {
@@ -219,25 +204,26 @@ void HttpStream::SendData(DataChunk chunk) {
         timeout = pdMS_TO_TICKS(100);
     }
 
-    BaseType_t send_result = xQueueSend(data_queue_, &chunk, timeout);
+    BaseType_t send_result = xQueueSend(data_queue_, &chunk, timeout);  
     if (send_result != pdPASS) {
-        UBaseType_t qb = uxQueueMessagesWaiting(data_queue_);
-        // 使用有限超时而不是无限等待，避免阻塞HTTP事件处理
-        send_result = xQueueSend(data_queue_, &chunk, pdMS_TO_TICKS(500));
-        if (send_result != pdPASS) {
-            UBaseType_t qa = uxQueueMessagesWaiting(data_queue_);
-            ESP_LOGW(TAG, "[QDIAG] Queue FULL, dropped chunk qb=%d qa=%d", qb, qa);
-            delete[] chunk.data;  // 释放内存而不是无限等待
-            return;
+        // 队列仍然满，改为阻塞式等待（不丢包）
+        ESP_LOGW(TAG, "Queue full after %dms wait, blocking until space available",
+                 timeout / portTICK_PERIOD_MS);
+        // 使用 portMAX_DELAY 无限等待，直到队列有空间
+        if (xQueueSend(data_queue_, &chunk, portMAX_DELAY) != pdPASS) {
+            // 理论上不会到达这里，除非队列被删除
+            ESP_LOGE(TAG, "Failed to send chunk even with infinite wait!");
+            delete[] chunk.data;
         }
     }
 }
 
-void HttpStream::ClearDataQueue() {
-    while (uxQueueMessagesWaiting(data_queue_) > 0) {
-        DataChunk chunk;
-        xQueueReceive(data_queue_, &chunk, portMAX_DELAY);
-        delete[] chunk.data;
+void HttpStream::CleanDataQueue() {
+    DataChunk chunk;
+    while (xQueueReceive(data_queue_, &chunk, 0) == pdPASS) {
+        if (chunk.data) {
+            delete[] chunk.data;
+        }
     }
 }
 QueueHandle_t& HttpStream::GetDataQueue() {
@@ -245,4 +231,13 @@ QueueHandle_t& HttpStream::GetDataQueue() {
 }
 int64_t HttpStream::GetContentLength() const {
     return content_length_;
+}
+
+void HttpStream::CleanClient() {
+    if (client_ == nullptr) {
+        return;
+    }
+    // esp_http_client_close(client_);
+    esp_http_client_cleanup(client_);
+    client_ = nullptr;
 }

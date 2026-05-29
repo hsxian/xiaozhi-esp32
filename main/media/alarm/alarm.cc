@@ -103,11 +103,11 @@ time_t Alarm::toTime(const time_t& now) const {
     return alarm_s;
 }
 
-std::string Alarm::ToJsonArray(std::vector<Alarm>& alarms) {
+std::string Alarm::ToJsonArray(std::vector<Alarm*>& alarms) {
     cJSON* array = cJSON_CreateArray();
     for (const auto& alarm : alarms) {
         cJSON* item = cJSON_CreateObject();
-        alarm.ToJson(item);
+        alarm->ToJson(item);
         cJSON_AddItemToArray(array, item);
     }
     auto json_str = cJSON_Print(array);
@@ -115,13 +115,12 @@ std::string Alarm::ToJsonArray(std::vector<Alarm>& alarms) {
     return json_str;
 }
 
-bool Alarm::findByName(std::vector<Alarm>& alarms, const std::string& name,
-                       std::vector<Alarm>& found_alarms) {
-    found_alarms.clear();
+std::vector<Alarm*> Alarm::findByName(std::vector<Alarm*>& alarms, const std::string& name) {
+    std::vector<Alarm*> found_alarms;
     for (const auto& alarm : alarms) {
-        if (alarm.name.find(name) != std::string::npos) {
+        if (alarm->name.find(name) != std::string::npos) {
             found_alarms.push_back(alarm);
         }
     }
-    return !found_alarms.empty();
+    return found_alarms;
 }

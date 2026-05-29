@@ -5,6 +5,7 @@
 #include "esp_http_client.h"
 #include <atomic>
 #include <freertos/queue.h>
+#include <freertos/semphr.h>
 
 // 数据块状态枚举（使用 uint8_t 节省内存）
 enum class DataStatus : uint8_t {
@@ -29,7 +30,7 @@ public:
     ~HttpStream();
     bool Open(const std::string& url);
     void StopRequest();
-    void ClearDataQueue();
+    void CleanDataQueue();
     QueueHandle_t& GetDataQueue();
     int64_t GetContentLength() const;
 
@@ -41,8 +42,9 @@ private:
 
     static void OpenTask(void* arg);
     static esp_err_t http_event_handler(esp_http_client_event_t* evt);
-    
-    esp_http_client_handle_t client_;
+
+    mutable SemaphoreHandle_t mutex_;
+    esp_http_client_handle_t client_{nullptr};
 
     std::string url_str_;
     TaskHandle_t task_handle_{nullptr};
@@ -52,4 +54,5 @@ private:
     void SendError();
     void SendEos();
     void SendData(DataChunk chunk);
+    void CleanClient();
 };

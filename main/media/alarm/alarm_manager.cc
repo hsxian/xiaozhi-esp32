@@ -81,8 +81,8 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         "level ranging from 0 to 100. The scheduling logic is handled by the RepeatMode enum, "
         "which supports single occurrences (ONCE), daily repeats (DAILY), workday-only schedules "
         "(WORKDAYS), holidays (HOLIDAYS), or fully customized patterns (CUSTOM). For custom "
-        "setups, the repeat_days integer acts as a bitmask covering Sunday(0b0000001) through "
-        "Saturday(0b1000000), "
+        "setups, the repeat_days integer acts as a bitmask covering "
+        "Sunday(1)、Monday(2)、Tuesday(4)、Wednesday(8)、Thursday(16)、Friday(32) and Saturday(64), "
         "allowing users to select specific days of the week for the alarm to trigger.",
         PropertyList({Property("id", kPropertyTypeString), Property("name", kPropertyTypeString),
                       Property("hour", kPropertyTypeInteger, 0, 23),
@@ -472,28 +472,25 @@ void AlarmManager::AddHoliday(const Holiday& holiday) { holidays_.push_back(holi
 std::vector<Holiday> AlarmManager::GetHolidays() const { return holidays_; }
 
 bool AlarmManager::IsHoliday(int month, int day, int weekday) const {
-    if (holidays_.empty()) {
-        return weekday == 0 || weekday == 6;
-    }
+    // 先查节假日列表中的特殊日期
     for (const auto& holiday : holidays_) {
-        if (holiday.month == month && holiday.day == day && holiday.is_offday) {
-            return true;
+        if (holiday.month == month && holiday.day == day) {
+            return holiday.is_offday;  // true=节假日休息, false=调休上班
         }
     }
-    return false;
+    // 不在特殊日期列表中，回退到周末判断
+    return weekday == 0 || weekday == 6;
 }
 
 bool AlarmManager::IsWorkday(int month, int day, int weekday) const {
-    if (holidays_.empty()) {
-        return weekday != 0 && weekday != 6;
-    }
-
+    // 先查节假日列表中的特殊日期
     for (const auto& holiday : holidays_) {
-        if (holiday.month == month && holiday.day == day && holiday.is_offday) {
-            return false;
+        if (holiday.month == month && holiday.day == day) {
+            return !holiday.is_offday;  // true=调休上班, false=节假日休息
         }
     }
-    return true;
+    // 不在特殊日期列表中，回退到工作日判断
+    return weekday != 0 && weekday != 6;
 }
 
 bool AlarmManager::ShouldRingAtDate(const time_t& now, const Alarm& alarm) const {

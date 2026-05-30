@@ -13,7 +13,7 @@ Alarm::Alarm()
       repeat_mode(RepeatMode::ONCE),
       repeat_days(0),
       state(AlarmState::ENABLED),
-      snooze_duration(5),
+      snooze_duration(2),
       snooze_count(6) {}
 
 // 带参数构造函数
@@ -28,7 +28,7 @@ Alarm::Alarm(const std::string& alarm_id, const std::string& alarm_name, int h, 
           repeat_mode(mode),
           repeat_days(repeat_days),
           state(AlarmState::ENABLED),
-          snooze_duration(5),
+          snooze_duration(2),
           snooze_count(6) {
     ESP_LOGI(TAG,
              "Alarm created: %s(%s), %02d:%02d:%02d, volume: %d, repeat mode: %d, repeat days: %d",

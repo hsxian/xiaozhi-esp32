@@ -27,11 +27,10 @@ public:
     Mp3MusicPlayer();
     ~Mp3MusicPlayer();
 
-    bool Play(const Music& music) override;
-    void Play(const std::vector<Music>& music_list) override;
+    bool Play(const Music& music, LoopMode mode = LoopMode::kPlayOnce) override;
+    void Play(const std::vector<Music*>& music_list, LoopMode mode = LoopMode::kPlayOnce) override;
     bool ChangePlayControlMode(const PlayControlMode& mode) override;
-    bool IsPlaying() const override;
-    
+
 private:
     // 处理接收到的MP3数据块，返回是否继续处理（true=继续，false=结束）
     bool ProcessReceivedChunk(DataChunk& chunk, std::vector<uint8_t>& mp3_buffer,
@@ -76,15 +75,25 @@ private:
     static constexpr int HIGH_WATER_MARK = 8;          // 降低高水位标记，更早开始节流
     static constexpr int CRITICAL_WATER_MARK = 14;     // 临界水位，接近满队列
 
+    // 播放器状态
+    enum class PlayState : uint8_t {
+        kIdle,     // 空闲
+        kPlaying,  // 播放中
+        kPausing,  // 暂停请求中（等待解码线程确认）
+        kPaused,   // 已暂停（解码线程已确认）
+        kResuming,    // 恢复请求中（等待解码线程确认）
+    };
+
+    bool IsPlaying() const override {
+        return play_state_ != PlayState::kIdle;
+    }
+
     AudioCodec* audio_codec_{nullptr};
     Display* display_{nullptr};
-    std::atomic<bool> is_playing_{false};
-    std::atomic<bool> is_downloading_{false};
-    std::atomic<bool> is_paused_{false};
+    std::atomic<PlayState> play_state_{PlayState::kIdle};
     std::mutex mutex_;
-    std::mutex http_mutex_;
     std::condition_variable pause_cv_;
-    std::vector<Music> current_music_list_;
+    std::vector<Music*> current_music_list_;
     std::atomic<MusicPlayer::PlayControlMode> current_control_mode_{MusicPlayer::PlayControlMode::kUnknown};
     Lyrics* lyrics_{nullptr};
     HttpStream* http_stream_{nullptr};
@@ -92,12 +101,8 @@ private:
     // 共享资源
     TaskHandle_t decode_task_handle_{nullptr};
     std::atomic<int> current_track_index_{0};
-    std::atomic<int> handled_task_list_flag_{0};
     std::string current_url_;
-    size_t download_bytes_received_{0};
     int wake_word_listener_id_{-1};
 
-    // 暂停确认：OnStateMachineCallback 等待解码线程真正暂停
-    std::atomic<bool> pause_acknowledged_{false};
     SemaphoreHandle_t pause_ack_semaphore_{nullptr};
 };

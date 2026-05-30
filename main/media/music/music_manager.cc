@@ -101,7 +101,7 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                                return "Playlist is empty, please search music first";
                            }
                            if (music_player_ && music_player_->IsPlaying()) {
-                               return "Music is already playing, please stop it first";
+                               return "Music is already playing, please use self.music.control to resume it";
                            }
                            if (music_player_ == nullptr) {
                                music_player_ = new Mp3MusicPlayer();

@@ -106,4 +106,8 @@ private:
     int state_machine_listener_id_{-1};
 
     SemaphoreHandle_t pause_ack_semaphore_{nullptr};
+
+    // 预分配的PCM输出缓冲区，避免运行时内存分配失败
+    static constexpr int MAX_PCM_OUTPUT_SAMPLES = 8192;  // 最大PCM输出样本数
+    std::vector<int16_t> output_pcm_buffer_;  // 预分配的输出缓冲区
 };

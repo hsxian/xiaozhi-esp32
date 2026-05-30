@@ -24,7 +24,8 @@ Mp3MusicPlayer::Mp3MusicPlayer()
     : audio_codec_(Board::GetInstance().GetAudioCodec()),
       display_(Board::GetInstance().GetDisplay()),
       lyrics_(new Lyrics()),
-      http_stream_(new HttpStream()) {
+      http_stream_(new HttpStream()),
+      output_pcm_buffer_(MAX_PCM_OUTPUT_SAMPLES, 0) {  // 预分配PCM输出缓冲区
     pause_ack_semaphore_ = xSemaphoreCreateBinary();
 
     wake_word_listener_id_ =
@@ -121,7 +122,8 @@ void Mp3MusicPlayer::Play(const std::vector<const Music*>& music_list, LoopMode 
     // 创建解码播放线程
     xTaskCreate(PlayMusicTask, "mp3_decode_task", 8192, this, 5, &decode_task_handle_);
 
-    ESP_LOGI(TAG, "Started  playing MP3 %d tracks, loop mode: %d", current_music_list_.size(), mode);
+    ESP_LOGI(TAG, "Started  playing MP3 %d tracks, loop mode: %d", current_music_list_.size(),
+             mode);
 }
 
 // 解码播放线程
@@ -170,6 +172,9 @@ bool Mp3MusicPlayer::ProcessReceivedChunk(DataChunk& chunk, std::vector<uint8_t>
 }
 void Mp3MusicPlayer::PreparePlayState() {
     auto& app = Application::GetInstance();
+    if (app.GetDeviceState() == kDeviceStateIdle) {
+        return;
+    }
     auto& audio_service = app.GetAudioService();
     // 等待播放状态
     while (IsNeedWaitDeviceState()) {
@@ -266,6 +271,7 @@ void Mp3MusicPlayer::DecodePlayLoop(const Music& music) {
         audio_codec_->EnableOutput(false);
         ESP_LOGI(TAG, "Decode: Waiting for data from queue...");
         http_stream_->StopRequest();
+        http_stream_->CleanDataQueue();
         return;
     }
 
@@ -301,7 +307,8 @@ void Mp3MusicPlayer::DecodePlayLoop(const Music& music) {
             std::unique_lock<std::mutex> lock(mutex_);
             pause_cv_.wait_for(lock, std::chrono::milliseconds(1000), [this]() {
                 auto s = play_state_.load();
-                return s == PlayState::kPlaying || s == PlayState::kResuming || s == PlayState::kIdle;
+                return s == PlayState::kPlaying || s == PlayState::kResuming ||
+                       s == PlayState::kIdle;
             });
             continue;
         }
@@ -372,7 +379,6 @@ void Mp3MusicPlayer::DecodePlayLoop(const Music& music) {
     // 清空队列中剩余数据
     http_stream_->CleanDataQueue();
 }
-
 
 void Mp3MusicPlayer::SkipId3Tag(std::vector<uint8_t>& mp3_buffer, size_t& mp3_data_size,
                                 size_t& mp3_data_offset) {
@@ -601,9 +607,8 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t
     int codec_output_rate = audio_codec_->output_sample_rate();
     int output_samples = frame_info.outputSamps;
     int output_channels = frame_info.nChans;
-    std::vector<int16_t> output_pcm;
 
-    ConvertPcmIfNeeded(frame_info, pcm_buffer, output_pcm, output_samples, output_channels);
+    ConvertPcmIfNeeded(frame_info, pcm_buffer, output_pcm_buffer_, output_samples, output_channels);
 
     // 更新播放进度current_position_ms_和total_duration_ms_
     UpdateTimeInfo(codec_output_rate, output_samples, output_channels, frame_info);
@@ -620,10 +625,12 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t
     }
 
     if (output_samples > 0 && play_state_ == PlayState::kPlaying) {
-        if (output_pcm.empty()) {
+        if (output_samples == frame_info.outputSamps && output_channels == frame_info.nChans) {
+            // 不需要转换，直接输出
             audio_codec_->OutputData(pcm_buffer.data(), output_samples);
         } else {
-            audio_codec_->OutputData(output_pcm.data(), output_samples);
+            // 使用转换后的PCM数据
+            audio_codec_->OutputData(output_pcm_buffer_.data(), output_samples);
         }
         // 保持AudioPowerCheck活跃
         Application::GetInstance().GetAudioService().UpdateLastOutputTime();
@@ -689,15 +696,20 @@ bool Mp3MusicPlayer::ChangePlayControlMode(const PlayControlMode& mode) {
         case PlayControlMode::kPause:
             // 暂停 HTTP 下载，释放网络带宽给 MQTT/TTS
             http_stream_->StopRequest();
+            http_stream_->CleanDataQueue();
             play_state_ = PlayState::kPausing;
             break;
 
         case PlayControlMode::kResume:
+            play_state_ = PlayState::kResuming;
+            pause_cv_.notify_all();
+            break;
+            
         case PlayControlMode::kUnknown:
         case PlayControlMode::kControlHandled:
         case PlayControlMode::kNext:
         case PlayControlMode::kPrevious:
-            play_state_ = PlayState::kResuming;
+            play_state_ = PlayState::kPlaying;
             pause_cv_.notify_all();
             break;
 
@@ -718,6 +730,7 @@ bool Mp3MusicPlayer::HandleControlSignal() {
         ESP_LOGI(TAG, "Decode play stopped by user");
         display_->SetChatMessage("music", "Stopped");
         http_stream_->StopRequest();
+        http_stream_->CleanDataQueue();
         play_state_ = PlayState::kIdle;
         return true;
     }
@@ -727,6 +740,7 @@ bool Mp3MusicPlayer::HandleControlSignal() {
         current_track_index_++;
         display_->SetChatMessage("music", "Next music");
         http_stream_->StopRequest();
+        http_stream_->CleanDataQueue();
         return true;
     }
     if (current_control_mode_ == PlayControlMode::kPrevious) {
@@ -734,6 +748,7 @@ bool Mp3MusicPlayer::HandleControlSignal() {
         current_track_index_ = std::max(0, --current_track_index_);
         display_->SetChatMessage("music", "Previous music");
         http_stream_->StopRequest();
+        http_stream_->CleanDataQueue();
         return true;
     }
     return false;

@@ -27,8 +27,8 @@ public:
     Mp3MusicPlayer();
     ~Mp3MusicPlayer();
 
-    bool Play(const Music& music, LoopMode mode = LoopMode::kPlayOnce) override;
-    void Play(const std::vector<Music*>& music_list, LoopMode mode = LoopMode::kPlayOnce) override;
+    bool Play(const Music* music, LoopMode mode = LoopMode::kPlayOnce) override;
+    void Play(const std::vector<const Music*>& music_list, LoopMode mode = LoopMode::kPlayOnce) override;
     bool ChangePlayControlMode(const PlayControlMode& mode) override;
 
 private:
@@ -93,7 +93,7 @@ private:
     std::atomic<PlayState> play_state_{PlayState::kIdle};
     std::mutex mutex_;
     std::condition_variable pause_cv_;
-    std::vector<Music*> current_music_list_;
+    std::vector<const Music*> current_music_list_;
     std::atomic<MusicPlayer::PlayControlMode> current_control_mode_{MusicPlayer::PlayControlMode::kUnknown};
     Lyrics* lyrics_{nullptr};
     HttpStream* http_stream_{nullptr};

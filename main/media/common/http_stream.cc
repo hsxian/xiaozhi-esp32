@@ -207,10 +207,10 @@ void HttpStream::SendData(DataChunk chunk) {
         ESP_LOGW(TAG, "Queue full after %dms wait, blocking until space available",
                  timeout / portTICK_PERIOD_MS);
         // 使用 portMAX_DELAY 无限等待，直到队列有空间
-        while (xQueueSend(data_queue_, &chunk, timeout) != pdPASS) {
+        if (xQueueSend(data_queue_, &chunk, portMAX_DELAY) != pdPASS) {
             // 理论上不会到达这里，除非队列被删除
-            ESP_LOGW(TAG, "Failed to send chunk even with infinite wait!");
-            vTaskDelay(timeout);
+            ESP_LOGE(TAG, "Failed to send chunk even with infinite wait!");
+            delete[] chunk.data;
         }
     }
 }

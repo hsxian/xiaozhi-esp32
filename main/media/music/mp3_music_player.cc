@@ -90,25 +90,21 @@ void Mp3MusicPlayer::ShowLyrics() {
     display_->SetChatMessage("music", str);
 }
 
-bool Mp3MusicPlayer::Play(const Music& music, LoopMode mode) {
-    std::vector<Music*> music_list = {new Music(music)};
+bool Mp3MusicPlayer::Play(const Music* music, LoopMode mode) {
+    std::vector<const Music*> music_list = {music};
 
     Play(music_list, mode);
     return true;
 }
 
-void Mp3MusicPlayer::Play(const std::vector<Music*>& music_list, LoopMode mode) {
+void Mp3MusicPlayer::Play(const std::vector<const Music*>& music_list, LoopMode mode) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (IsPlaying()) {
         ESP_LOGW(TAG, "Already playing, stop current first");
         return;
     }
-
-    // Deep copy: allocate new Music objects for internal ownership
-    for (auto* m : music_list) {
-        current_music_list_.push_back(new Music(*m));
-    }
+    current_music_list_ = music_list;
     current_control_mode_ = MusicPlayer::PlayControlMode::kUnknown;
     play_state_ = PlayState::kPlaying;
     current_track_index_ = 0;
@@ -194,9 +190,6 @@ void Mp3MusicPlayer::PlayMusicLoop() {
         }
     }
 
-    // 初始播放准备（仅首次播放时执行）
-    PreparePlayState();
-
     while (play_state_ != PlayState::kIdle) {
         // 检查曲目索引越界
         if (current_track_index_ < 0 || current_track_index_ >= playlist_size) {
@@ -224,6 +217,9 @@ void Mp3MusicPlayer::PlayMusicLoop() {
         auto* music = current_music_list_[actual_index];
         ESP_LOGI(TAG, "Playing track %d/%d [actual=%d]: %s", 1 + current_track_index_,
                  playlist_size, actual_index, music->ToString().c_str());
+
+        // 初始播放准备
+        PreparePlayState();
 
         DownloadLyrics(*music);
 
@@ -412,10 +408,6 @@ void Mp3MusicPlayer::CleanupResources() {
     }
 
     current_track_index_ = 0;
-    for (auto* music : current_music_list_) {
-        delete music;
-    }
-    current_music_list_.clear();
 }
 
 void Mp3MusicPlayer::ConvertPcmIfNeeded(const MP3FrameInfo& frame_info,

@@ -23,9 +23,18 @@ public:
     // 从JSON字符串解析
     bool FromJson(const std::string& json);
     void FromJson(const cJSON* item);
-    static std::string ToJsonArray(std::vector<Music*>& musics);
-    static void FromJsonArray(cJSON* array, std::vector<Music*>& musics);
-    static std::vector<Music*> Search(std::vector<Music*>& musics, const std::string& keyword,
-                                      int page = 1, int page_size = 10);
     std::string ToString() const;
+};
+
+class MusicHelper {
+public:
+    std::string ToJsonArray(std::vector<Music*>& musics);
+    void FromJsonArray(cJSON* array, std::vector<Music*>& musics);
+    std::vector<Music*> Search(std::vector<Music*>& musics, const std::string& keyword,
+                                      int page = 1, int page_size = 10);
+    bool Contains(std::vector<Music*>& musics, Music* music);
+    void TryAdd(std::vector<Music*>& musics, std::vector<Music*>& new_musics,
+                std::vector<Music*>& added_musics, std::vector<Music*>& failed_musics);
+    void Remove(std::vector<Music*>& musics, std::vector<Music*>& removed_musics);
+    void Release(std::vector<Music*>& musics);
 };

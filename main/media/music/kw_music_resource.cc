@@ -18,7 +18,7 @@ _Static_assert(sizeof(CONFIG_KW_MUSIC_ADDRESS) > 1, "CONFIG_KW_MUSIC_ADDRESS不�
 bool KwMusicResource::Search(const QueryBase& query, std::vector<Music*>& music_list) {
     RestfulClient restful_client;
     std::string url = std::format("{}?name={}&page={}&limit={}", CONFIG_KW_MUSIC_ADDRESS,
-        query.keyword, query.page, query.page_size);
+                                  query.keyword, query.page, query.page_size);
     ESP_LOGI(TAG, "url: %s", url.c_str());
     std::string keyword = restful_client.UrlEncode(query.keyword);
     url = std::format("{}?name={}&page={}&limit={}", CONFIG_KW_MUSIC_ADDRESS, keyword, query.page,
@@ -40,11 +40,9 @@ bool KwMusicResource::Search(const QueryBase& query, std::vector<Music*>& music_
     cJSON* code = cJSON_GetObjectItem(json, "code");
     if (code && cJSON_IsNumber(code) && code->valueint == 200) {
         cJSON* data = cJSON_GetObjectItem(json, "data");
-        Music::FromJsonArray(data, music_list);
-        // for (auto& music : music_list) {
-        //     // 替换url中level=exhigh为level=standard，获取标准品质的音乐URL
-        //     // music.url = ReplaceString(music.url, "level=exhigh", "level=standard");
-        // }
+
+        MusicHelper music_helper;
+        music_helper.FromJsonArray(data, music_list);
         success = music_list.size() > 0;
     } else {
         ESP_LOGE(TAG, "Failed to parse JSON, code: %d", code->valueint);

@@ -48,7 +48,12 @@ void Music::FromJson(const cJSON* item) {
     json_helper.GetString(item, "url", url);
 }
 
-void Music::FromJsonArray(cJSON* array, std::vector<Music*>& musics) {
+std::string Music::ToString() const {
+    // 美化输出音乐信息，太长了不方便查看，暂时只输出部分字段
+    return std::format("Music[name={}, artist={}, album={}]", name, artist, album);
+}
+
+void MusicHelper::FromJsonArray(cJSON* array, std::vector<Music*>& musics) {
     cJSON* item = nullptr;
     cJSON_ArrayForEach (item, array) {
         auto music = new Music();
@@ -57,7 +62,7 @@ void Music::FromJsonArray(cJSON* array, std::vector<Music*>& musics) {
     }
 }
 
-std::string Music::ToJsonArray(std::vector<Music*>& musics) {
+std::string MusicHelper::ToJsonArray(std::vector<Music*>& musics) {
     cJSON* array = cJSON_CreateArray();
     for (auto* music : musics) {
         cJSON* root = cJSON_CreateObject();
@@ -69,12 +74,8 @@ std::string Music::ToJsonArray(std::vector<Music*>& musics) {
     return json_str;
 }
 
-std::string Music::ToString() const {
-    // 美化输出音乐信息，太长了不方便查看，暂时只输出部分字段
-    return std::format("Music[name={}, artist={}, album={}]", name, artist, album);
-}
 
-std::vector<Music*> Music::Search(std::vector<Music*>& musics, const std::string& keyword, int page,
+std::vector<Music*> MusicHelper::Search(std::vector<Music*>& musics, const std::string& keyword, int page,
                                   int page_size) {
     // 简单的搜索实现，根据关键词和分页参数返回匹配的音乐
     std::vector<Music*> result;
@@ -98,4 +99,38 @@ std::vector<Music*> Music::Search(std::vector<Music*>& musics, const std::string
     int end = std::min(start + page_size, (int)result.size());
     result.assign(result.begin() + start, result.begin() + end);
     return result;
+}
+bool MusicHelper::Contains(std::vector<Music*>& musics, Music* music) {
+    for (auto* m : musics) {
+        if (m->rid == music->rid||m->name == music->name) {
+            return true;
+        }
+    }
+    return false;
+}
+void MusicHelper::TryAdd(std::vector<Music*>& musics, std::vector<Music*>& new_musics, std::vector<Music*>& added_musics, std::vector<Music*>& failed_musics) {
+    for (auto* music : new_musics) {
+        if (Contains(musics, music)) {
+            failed_musics.push_back(music);
+        } else {
+            musics.push_back(music);
+            added_musics.push_back(music);
+        }
+    }
+}
+void MusicHelper::Release(std::vector<Music*>& musics) {
+    for (auto* music : musics) {
+        delete music;
+    }
+    musics.clear();
+}
+
+void MusicHelper::Remove(std::vector<Music*>& musics, std::vector<Music*>& removed_musics) {
+    for (auto* music : removed_musics) {
+        auto it = std::find(musics.begin(), musics.end(), music);
+        if (it != musics.end()) {
+            delete *it;
+            musics.erase(it);
+        }
+    }
 }

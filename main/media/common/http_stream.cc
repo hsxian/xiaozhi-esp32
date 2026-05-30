@@ -205,11 +205,9 @@ void HttpStream::OpenTask(void* arg) {
         stream->SendError();
         ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
     }
-
-    stream->CleanClient();
     stream->task_handle_ = nullptr;
-    vTaskDelete(
-        nullptr);  // 任务自己结束时删除自己，StopRequest 会通过判断 task_handle_ 来决定是否需要删除
+    // 任务自己结束时删除自己，StopRequest 会通过判断 task_handle_ 来决定是否需要删除
+    vTaskDelete(nullptr); 
 }
 
 void HttpStream::SendError() {

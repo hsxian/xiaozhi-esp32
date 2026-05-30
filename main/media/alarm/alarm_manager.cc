@@ -235,7 +235,6 @@ void AlarmManager::SaveAlarms() {
 }
 
 void AlarmManager::LoadHolidays() {
-    return; // 暂时屏蔽节假日加载，避免网络请求导致的闹钟不稳定
     // 添加中国节假日（可根据需要扩展）
     holidays_.clear();
 

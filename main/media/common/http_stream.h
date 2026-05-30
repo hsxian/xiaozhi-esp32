@@ -1,9 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include "esp_http_client.h"
-#include <atomic>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 
@@ -30,6 +30,8 @@ public:
     ~HttpStream();
     bool Open(const std::string& url);
     void StopRequest();
+    void PauseDownload();
+    void ResumeDownload();
     void CleanDataQueue();
     QueueHandle_t& GetDataQueue();
     int64_t GetContentLength() const;
@@ -51,6 +53,8 @@ private:
     QueueHandle_t data_queue_;  // MP3数据队列
     int64_t content_length_{0};
     size_t download_bytes_received_{0};
+    std::atomic<bool> download_paused_{false};
+    SemaphoreHandle_t pause_semaphore_{nullptr};
     void SendError();
     void SendEos();
     void SendData(DataChunk chunk);

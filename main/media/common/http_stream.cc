@@ -13,10 +13,18 @@ HttpStream::HttpStream() {
         ESP_LOGE(TAG, "Failed to create data queue");
     }
     mutex_ = xSemaphoreCreateMutex();
+    pause_semaphore_ = xSemaphoreCreateBinary();
+    if (pause_semaphore_) {
+        xSemaphoreGive(pause_semaphore_);  // Initially available (not paused)
+    }
 }
 
 HttpStream::~HttpStream() {
     StopRequest();
+    if (pause_semaphore_) {
+        vSemaphoreDelete(pause_semaphore_);
+        pause_semaphore_ = nullptr;
+    }
     if (data_queue_) {
         vQueueDelete(data_queue_);
         data_queue_ = nullptr;
@@ -30,9 +38,13 @@ HttpStream::~HttpStream() {
 esp_err_t HttpStream::http_event_handler(esp_http_client_event_t* evt) {
     // ESP_LOGI(TAG, "http_event_handler, event_id=%d", evt->event_id);
     auto stream = static_cast<HttpStream*>(evt->user_data);
-    // auto client = evt->client;
     switch (evt->event_id) {
         case HTTP_EVENT_ON_DATA: {
+            // 暂停下载时阻塞等待，不丢数据，TCP 流控自动减速
+            if (stream->download_paused_) {
+                xSemaphoreTake(stream->pause_semaphore_, portMAX_DELAY);
+                xSemaphoreGive(stream->pause_semaphore_);
+            }
             DataChunk chunk;
             chunk.data = new uint8_t[evt->data_len];
             memcpy(chunk.data, evt->data, evt->data_len);
@@ -105,7 +117,26 @@ bool HttpStream::Open(const std::string& url) {
     return true;
 }
 
+void HttpStream::PauseDownload() {
+    download_paused_ = true;
+    // 取走信号量，让 HTTP 事件处理器阻塞
+    if (pause_semaphore_) {
+        xSemaphoreTake(pause_semaphore_, portMAX_DELAY);
+    }
+}
+
+void HttpStream::ResumeDownload() {
+    download_paused_ = false;
+    // 归还信号量，唤醒 HTTP 事件处理器
+    if (pause_semaphore_) {
+        xSemaphoreGive(pause_semaphore_);
+    }
+}
+
 void HttpStream::StopRequest() {
+    // 先恢复下载，避免死锁（事件处理器可能正阻塞在信号量上）
+    ResumeDownload();
+
     if (mutex_) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
     }

@@ -23,10 +23,7 @@ private :
 
     void TryResleaseMusicPlayer();
 
-    std::vector<Music>
-        music_search_list_;
-    std::vector<Music>
-        music_list_;
+    std::vector<Music*> music_list_;
 
     MusicPlayer* music_player_ = nullptr;
 };

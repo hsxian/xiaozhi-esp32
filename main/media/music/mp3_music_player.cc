@@ -306,7 +306,7 @@ void Mp3MusicPlayer::DecodePlayLoop(const Music& music) {
             // 暂停恢复后准备播放状态
             PreparePlayState();
             // 恢复 HTTP 下载，从断点继续
-            http_stream_->ResumeDownload();
+            http_stream_->Open(music.url, http_stream_->GetDownloadBytesReceived());
         }
 
         // 从队列获取数据 - 使用较长超时时间确保能获取到数据
@@ -687,7 +687,7 @@ bool Mp3MusicPlayer::ChangePlayControlMode(const PlayControlMode& mode) {
     switch (mode) {
         case PlayControlMode::kPause:
             // 暂停 HTTP 下载，释放网络带宽给 MQTT/TTS
-            http_stream_->PauseDownload();
+            http_stream_->StopRequest();
             play_state_ = PlayState::kPausing;
             break;
 

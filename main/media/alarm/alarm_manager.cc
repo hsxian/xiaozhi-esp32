@@ -235,6 +235,7 @@ void AlarmManager::SaveAlarms() {
 }
 
 void AlarmManager::LoadHolidays() {
+    return; // 暂时屏蔽节假日加载，避免网络请求导致的闹钟不稳定
     // 添加中国节假日（可根据需要扩展）
     holidays_.clear();
 
@@ -251,6 +252,7 @@ void AlarmManager::LoadHolidays() {
     std::string response = restful_client.Get(url);
     if (response.empty()) {
         ESP_LOGW(TAG, "Failed to fetch holidays from network");
+        UpdateTimerLocked();
         return;
     }
 
@@ -258,6 +260,7 @@ void AlarmManager::LoadHolidays() {
     cJSON* root = cJSON_Parse(response.c_str());
     if (root == nullptr) {
         ESP_LOGE(TAG, "Failed to parse holiday JSON");
+        UpdateTimerLocked();
         return;
     }
 

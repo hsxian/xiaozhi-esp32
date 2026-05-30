@@ -2,10 +2,10 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include "esp_http_client.h"
 #include <freertos/queue.h>
-#include <freertos/semphr.h>
 
 // 数据块状态枚举（使用 uint8_t 节省内存）
 enum class DataStatus : uint8_t {
@@ -28,13 +28,12 @@ class HttpStream {
 public:
     HttpStream();
     ~HttpStream();
-    bool Open(const std::string& url);
+    bool Open(const std::string& url, size_t resume_offset = 0);
     void StopRequest();
-    void PauseDownload();
-    void ResumeDownload();
     void CleanDataQueue();
     QueueHandle_t& GetDataQueue();
     int64_t GetContentLength() const;
+    int64_t GetDownloadBytesReceived() const;
 
 private:
 
@@ -45,7 +44,7 @@ private:
     static void OpenTask(void* arg);
     static esp_err_t http_event_handler(esp_http_client_event_t* evt);
 
-    mutable SemaphoreHandle_t mutex_;
+    mutable std::mutex mutex_;
     esp_http_client_handle_t client_{nullptr};
 
     std::string url_str_;
@@ -53,8 +52,7 @@ private:
     QueueHandle_t data_queue_;  // MP3数据队列
     int64_t content_length_{0};
     size_t download_bytes_received_{0};
-    std::atomic<bool> download_paused_{false};
-    SemaphoreHandle_t pause_semaphore_{nullptr};
+    size_t resume_offset_{0};  // 断点续传位置
     void SendError();
     void SendEos();
     void SendData(DataChunk chunk);

@@ -12,26 +12,13 @@ HttpStream::HttpStream() {
     if (!data_queue_) {
         ESP_LOGE(TAG, "Failed to create data queue");
     }
-    mutex_ = xSemaphoreCreateMutex();
-    pause_semaphore_ = xSemaphoreCreateBinary();
-    if (pause_semaphore_) {
-        xSemaphoreGive(pause_semaphore_);  // Initially available (not paused)
-    }
 }
 
 HttpStream::~HttpStream() {
     StopRequest();
-    if (pause_semaphore_) {
-        vSemaphoreDelete(pause_semaphore_);
-        pause_semaphore_ = nullptr;
-    }
     if (data_queue_) {
         vQueueDelete(data_queue_);
         data_queue_ = nullptr;
-    }
-    if (mutex_) {
-        vSemaphoreDelete(mutex_);
-        mutex_ = nullptr;
     }
 }
 
@@ -40,18 +27,13 @@ esp_err_t HttpStream::http_event_handler(esp_http_client_event_t* evt) {
     auto stream = static_cast<HttpStream*>(evt->user_data);
     switch (evt->event_id) {
         case HTTP_EVENT_ON_DATA: {
-            // 暂停下载时阻塞等待，不丢数据，TCP 流控自动减速
-            if (stream->download_paused_) {
-                xSemaphoreTake(stream->pause_semaphore_, portMAX_DELAY);
-                xSemaphoreGive(stream->pause_semaphore_);
-            }
             DataChunk chunk;
             chunk.data = new uint8_t[evt->data_len];
             memcpy(chunk.data, evt->data, evt->data_len);
             chunk.size = evt->data_len;
             chunk.status = DataStatus::kNormal;
-            stream->download_bytes_received_ += evt->data_len;
             stream->SendData(chunk);
+            stream->download_bytes_received_ += evt->data_len;
             // ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d, download_bytes_received=%d",
             // evt->data_len,
             //          stream->download_bytes_received_);
@@ -107,8 +89,10 @@ esp_err_t HttpStream::http_event_handler(esp_http_client_event_t* evt) {
     return ESP_OK;
 }
 
-bool HttpStream::Open(const std::string& url) {
+bool HttpStream::Open(const std::string& url, size_t resume_offset) {
     url_str_ = url;
+    download_bytes_received_ = resume_offset;
+    resume_offset_ = resume_offset;
 
     StopRequest();
 
@@ -117,40 +101,15 @@ bool HttpStream::Open(const std::string& url) {
     return true;
 }
 
-void HttpStream::PauseDownload() {
-    download_paused_ = true;
-    // 取走信号量，让 HTTP 事件处理器阻塞
-    if (pause_semaphore_) {
-        xSemaphoreTake(pause_semaphore_, portMAX_DELAY);
-    }
-}
-
-void HttpStream::ResumeDownload() {
-    download_paused_ = false;
-    // 归还信号量，唤醒 HTTP 事件处理器
-    if (pause_semaphore_) {
-        xSemaphoreGive(pause_semaphore_);
-    }
-}
 
 void HttpStream::StopRequest() {
-    // 先恢复下载，避免死锁（事件处理器可能正阻塞在信号量上）
-    ResumeDownload();
-
-    if (mutex_) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-    }
+    std::lock_guard<std::mutex> lock(mutex_);
 
     CleanClient();
 
     if (task_handle_ != nullptr) {
         vTaskDelete(task_handle_);
         task_handle_ = nullptr;
-    }
-    CleanDataQueue();
-
-    if (mutex_) {
-        xSemaphoreGive(mutex_);
     }
 }
 
@@ -181,6 +140,16 @@ void HttpStream::OpenTask(void* arg) {
     esp_http_client_set_header(client, "User-Agent",
                                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like "
                                "Gecko) Chrome/148.0.0.0 Safari/537.36");
+
+    // 如果有断点位置，设置 Range 请求头实现断点续传
+    if (stream->resume_offset_ > 0) {
+        char range_header[64];
+        snprintf(range_header, sizeof(range_header), "bytes=%lu-", (unsigned long)stream->resume_offset_);
+        esp_http_client_set_header(client, "Range", range_header);
+        ESP_LOGI(TAG, "Resuming download with Range header: %s", range_header);
+    }
+
+
 
     ESP_LOGI(TAG, "OpenTask, perform request");
     esp_err_t err;
@@ -256,6 +225,7 @@ void HttpStream::CleanDataQueue() {
 }
 QueueHandle_t& HttpStream::GetDataQueue() { return data_queue_; }
 int64_t HttpStream::GetContentLength() const { return content_length_; }
+int64_t HttpStream::GetDownloadBytesReceived() const { return download_bytes_received_; }
 
 void HttpStream::CleanClient() {
     if (client_ == nullptr) {

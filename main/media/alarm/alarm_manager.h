@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include "alarm.h"
+#include <freertos/FreeRTOS.h>
 
 class McpTool;
 class Display;
@@ -97,12 +98,17 @@ private:
 
     void RaiseAlarmRinging(const Alarm& alarm);
     void StopAlarmRinging(const Alarm& alarm);
+    bool OnWakeWordDetected(void* data);
+    void RingingTask(void* data);
+    void StopRingingTask();
 
     std::vector<Alarm*> alarms_;
     std::vector<Holiday> holidays_;
     esp_timer_handle_t timer_handle_;
+    TaskHandle_t ringing_task_handle_{nullptr};
     Alarm* current_ringing_alarm_{nullptr};
     bool is_ringing_;
+    bool stop_ringing_signal_ = false;
     mutable std::mutex mutex_;
     // 闹钟响起之前的系统音量
     int original_volume_;

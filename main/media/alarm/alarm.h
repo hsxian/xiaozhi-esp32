@@ -6,7 +6,7 @@
 
 struct cJSON;
 // 重复模式枚举
-enum class RepeatMode {
+enum class RepeatMode : uint8_t {
     ONCE,      // 单次响铃
     DAILY,     // 每天
     WORKDAYS,  // 工作日
@@ -15,7 +15,7 @@ enum class RepeatMode {
 };
 
 // 闹钟状态枚举
-enum class AlarmState {
+enum class AlarmState : uint8_t {
     DISABLED,  // 禁用
     ENABLED,   // 启用
     RINGING,   // 响铃中
@@ -34,7 +34,7 @@ struct Alarm {
     RepeatMode repeat_mode;  // 重复模式
     uint8_t repeat_days;         // 自定义重复日期（周日到周六，共7天,每个位表示一个天）最大值为127
     AlarmState state;        // 闹钟状态
-    uint16_t snooze_duration;     // 贪睡时长（分钟），默认5分钟
+    uint8_t snooze_duration;     // 贪睡时长（分钟），默认5分钟
     uint8_t snooze_count;    // 剩余贪睡次数，-1表示无限次
     time_t start_ring_time;   // 开始响铃时间
     // 默认构造函数

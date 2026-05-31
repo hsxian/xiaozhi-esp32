@@ -10,6 +10,7 @@
 #include <cstring>
 #include <mutex>
 #include "application.h"
+#include "assets/lang_config.h"
 #include "audio_codec.h"
 #include "board.h"
 #include "device_state.h"
@@ -17,6 +18,7 @@
 #include "mcp_server.h"
 #include "media/common/restful_client.h"
 #include "media/common/string_helper.h"
+#include "media/common/xiaozhi_helper.h"
 
 static const char* TAG = "AlarmManager";
 #define RECORD_FILE_NAME "alarm_record"
@@ -28,7 +30,10 @@ AlarmManager& AlarmManager::GetInstance() {
 }
 
 AlarmManager::AlarmManager()
-    : timer_handle_(nullptr), is_ringing_(false), display_(Board::GetInstance().GetDisplay()) {}
+    : timer_handle_(nullptr), is_ringing_(false), display_(Board::GetInstance().GetDisplay()) {
+    Application::GetInstance().BeforeHandleWakeWordEventListener().AddEventListener(
+        [this](void* data) { return this->OnWakeWordDetected(data); });
+}
 
 AlarmManager::~AlarmManager() {
     if (timer_handle_) {
@@ -82,7 +87,8 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         "which supports single occurrences (ONCE), daily repeats (DAILY), workday-only schedules "
         "(WORKDAYS), holidays (HOLIDAYS), or fully customized patterns (CUSTOM). For custom "
         "setups, the repeat_days integer acts as a bitmask covering "
-        "Sunday(1)、Monday(2)、Tuesday(4)、Wednesday(8)、Thursday(16)、Friday(32) and Saturday(64), "
+        "Sunday(1)、Monday(2)、Tuesday(4)、Wednesday(8)、Thursday(16)、Friday(32) and "
+        "Saturday(64), "
         "allowing users to select specific days of the week for the alarm to trigger.",
         PropertyList({Property("id", kPropertyTypeString), Property("name", kPropertyTypeString),
                       Property("hour", kPropertyTypeInteger, 0, 23),
@@ -239,7 +245,7 @@ void AlarmManager::LoadHolidays() {
     holidays_.clear();
 
     // 获取当前年份
-    time_t now = time(nullptr);
+    time_t now = time(nullptr) + 2*60;
     struct tm tm;
     localtime_r(&now, &tm);
     int current_year = tm.tm_year + 1900;
@@ -334,6 +340,7 @@ bool AlarmManager::RemoveAlarmLocked(const std::string& alarm_id) {
         return false;
     }
 
+    ESP_LOGI(TAG, "Removed alarm: %s (%s)", (*it)->name.c_str(), alarm_id.c_str());
     if (*it == current_ringing_alarm_) {
         current_ringing_alarm_ = nullptr;
     }
@@ -341,8 +348,6 @@ bool AlarmManager::RemoveAlarmLocked(const std::string& alarm_id) {
     alarms_.erase(it);
     SaveAlarms();
     UpdateTimerLocked();
-
-    ESP_LOGI(TAG, "Removed alarm: %s", alarm_id.c_str());
     return true;
 }
 
@@ -421,6 +426,7 @@ void AlarmManager::StopRinging() {
 
         current_ringing_alarm_ = nullptr;
         UpdateTimerLocked();
+        auto& app = Application::GetInstance();
         ESP_LOGI(TAG, "Alarm stopped");
     }
 }
@@ -432,7 +438,6 @@ void AlarmManager::Snooze() {
         audio_codec->SetOutputVolume(original_volume_);
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
 
     if (!is_ringing_ || !current_ringing_alarm_) {
         ESP_LOGW(TAG, "No alarm is ringing");
@@ -451,6 +456,7 @@ void AlarmManager::Snooze() {
         current_ringing_alarm_->snooze_count--;
     }
 
+    std::lock_guard<std::mutex> lock(mutex_);
     // 停止当前响铃
     is_ringing_ = false;
 
@@ -653,14 +659,24 @@ void AlarmManager::RaiseAlarmRinging(const Alarm& alarm) {
     auto& board = Board::GetInstance();
     auto audio_codec = board.GetAudioCodec();
     original_volume_ = audio_codec->output_volume();
-    // audio_codec->SetOutputVolume(alarm.volume);
 
     auto& app = Application::GetInstance();
 
+    StopRingingTask();
 
-    app.AppendEventToGroup(MAIN_EVENT_ALARM_CLOCK_RINGING);
+    XiaozhiHelper helper;
+    while (helper.IsNeedWaitDeviceIdleState()) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
 
-    ESP_LOGI(TAG, "Alarm ringing: %s", alarm.name.c_str());
+    app.SetDeviceState(kDeviceStateAlarmClock);
+    xTaskCreate(
+        [](void* param) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            AlarmManager* manager = static_cast<AlarmManager*>(param);
+            manager->RingingTask(manager);
+        },
+        "AlarmRingingTask", 4096, this, tskIDLE_PRIORITY + 1, &ringing_task_handle_);
 }
 
 void AlarmManager::StopAlarmRinging(const Alarm& alarm) {
@@ -672,11 +688,86 @@ void AlarmManager::StopAlarmRinging(const Alarm& alarm) {
 
     auto& app = Application::GetInstance();
 
-    app.ClearEventFromGroup(MAIN_EVENT_ALARM_CLOCK_RINGING);
+    StopRingingTask();
 
+    if (app.GetDeviceState() == kDeviceStateAlarmClock) {
+        app.SetDeviceState(kDeviceStateIdle);
+    }
     ESP_LOGI(TAG, "Alarm stopped: %s", alarm.name.c_str());
 }
 
+void AlarmManager::RingingTask(void* data) {
+    if (current_ringing_alarm_ == nullptr) {
+        ESP_LOGW(TAG, "RingingTask started but no current ringing alarm");
+        ringing_task_handle_ = nullptr;
+        vTaskDelete(nullptr);
+        return;
+    }
+    time_t old_now = current_ringing_alarm_->start_ring_time;
+    int start_volume = 30;
+    int alarm_volume = current_ringing_alarm_->volume;
+
+    auto& board = Board::GetInstance();
+    auto audio_codec = board.GetAudioCodec();
+    auto& app = Application::GetInstance();
+    auto& audio_service = app.GetAudioService();
+
+    auto now = time(nullptr);
+    int time_diff = difftime(now, old_now);
+    // ？？后自动停止响铃
+    int ringing_seconds = 60 * 3;
+    stop_ringing_signal_ = false;
+    
+    while (time_diff < ringing_seconds && !stop_ringing_signal_) {
+        auto vol = start_volume + 2 * time_diff * (alarm_volume - start_volume) / ringing_seconds;
+        vol = std::min(vol, (int)alarm_volume);
+        if (time_diff % 3 == 0 && vol != audio_codec->output_volume()) {
+            audio_codec->SetOutputVolume(vol);
+        }
+
+        if (audio_service.IsIdle()) {
+            app.PlaySound(Lang::Sounds::OGG_ALARM_RING);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(500));
+        audio_service.UpdateLastOutputTime();
+        now = time(nullptr);
+        time_diff = difftime(now, old_now);
+    }
+    //自己停止自己，不能直接调用StopAlarmRinging，因为它会删除当前任务，导致后续代码无法执行
+    ringing_task_handle_ = nullptr;
+    if (!stop_ringing_signal_)
+        Snooze();
+    vTaskDelete(nullptr);
+}
+
+void AlarmManager::StopRingingTask() {
+    if (!ringing_task_handle_) {
+        return;
+    }
+    auto& app = Application::GetInstance();
+    auto& audio_service = app.GetAudioService();
+    audio_service.WaitForPlaybackQueueEmpty();
+    if (ringing_task_handle_) {
+        ringing_task_handle_ = nullptr;
+        ESP_LOGI(TAG, "Stopping ringing task");
+        vTaskDelete(ringing_task_handle_);
+    }
+}
 bool AlarmManager::IsRinging() const { return is_ringing_; }
 
 Alarm* AlarmManager::GetCurrentRingingAlarm() const { return current_ringing_alarm_; }
+
+bool AlarmManager::OnWakeWordDetected(void* data) {
+    auto& app = Application::GetInstance();
+    if(app.GetDeviceState() != kDeviceStateAlarmClock) {
+        return false;
+    }
+    stop_ringing_signal_ = true;
+    StopRinging();
+    ESP_LOGI(TAG, "Wake word detected, stopping alarm ringing");
+
+    XiaozhiHelper helper;
+    helper.ReRaiseWakeWordDetectedInTask();
+    return true;
+}

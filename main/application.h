@@ -34,8 +34,6 @@
 #define MAIN_EVENT_STOP_LISTENING       (1 << 11)
 #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
 
-#define MAIN_EVENT_ALARM_CLOCK_RINGING (1 << 13)
-
 enum AecMode {
     kAecOff,
     kAecOnDeviceSide,

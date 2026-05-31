@@ -12,6 +12,7 @@
 #include "media/common/http_stream.h"
 #include "media/common/restful_client.h"
 #include "media/common/string_helper.h"
+#include "media/common/xiaozhi_helper.h"
 #include "music_resource.h"
 
 extern "C" {
@@ -175,9 +176,10 @@ void Mp3MusicPlayer::PreparePlayState() {
     if (app.GetDeviceState() == kDeviceStateIdle) {
         return;
     }
+    XiaozhiHelper helper;
     auto& audio_service = app.GetAudioService();
     // 等待播放状态
-    while (IsNeedWaitDeviceState()) {
+    while (helper.IsNeedWaitDeviceIdleState()) {
         audio_service.UpdateLastOutputTime();
         vTaskDelay(pdMS_TO_TICKS(500));
     }

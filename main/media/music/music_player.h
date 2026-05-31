@@ -44,7 +44,6 @@ public:
     virtual ~MusicPlayer() {}
 
 protected:
-    bool IsNeedWaitDeviceState() const;
     void ResetPlaybackProgress();
     // 播放进度跟踪
     std::atomic<int32_t> total_duration_ms_{0};       // 当前歌曲总时长（毫秒）

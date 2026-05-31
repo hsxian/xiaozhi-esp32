@@ -18,60 +18,10 @@
 #include <font_awesome.h>
 
 #if CONFIG_ENABLE_ALARM
-#include "media/alarm/alarm_event_config.h"
 #include "media/alarm/alarm_manager.h"
-#include "media/common/http_stream.h"
 #endif
 
 #define TAG "Application"
-
-#define TEST 0
-
-#if TEST
-#include "media/common/restful_client.h"
-#include "media/music/mp3_music_player.h"
-void testNoNetwork() {
-
-    time_t now = time(nullptr);
-    ESP_LOGI(TAG, "now=%ld", now);
-    struct tm tm;
-    localtime_r(&now, &tm);
-    ESP_LOGI(TAG, "tm=%s", asctime(&tm));
-    // Alarm work_alarm("1", "1", 0, 3, 0, 80, RepeatMode::CUSTOM, 0b100000);
-    // AlarmManager::GetInstance().AddAlarm(work_alarm);
-    // Alarm work_alarm2("2", "2", 0, 2, 0, 80, RepeatMode::CUSTOM, 0b10000);
-    // AlarmManager::GetInstance().AddAlarm(work_alarm2);
-    // Alarm work_alarm3("3", "3", 0, 1, 0, 80, RepeatMode::CUSTOM, 0b10000);
-    // AlarmManager::GetInstance().AddAlarm(work_alarm3);
-    Alarm work_alarm4("4", "4", tm.tm_hour, tm.tm_min, tm.tm_sec + 30, 80, RepeatMode::ONCE);
-    work_alarm4.snooze_duration = 1;
-    AlarmManager::GetInstance().AddAlarm(work_alarm4);
-}
-void testOnNetwork() {
-    xTaskCreate(
-        [](void* arg) {
-            vTaskDelay(pdMS_TO_TICKS(300));
-            RestfulClient restful_client;
-            // https://httpbin.org/get
-            // https://kw-api.cenguigui.cn/?id=22837479&type=lyr&format=all
-            //  std::string redirect_url;
-            //  restful_client.TryGetRedirectUrl("http://kw-api.cenguigui.cn/?id=22837479&type=lyr&format=all",
-            //                     redirect_url);
-            // auto response =
-            //     restful_client.Get("http://kw-api.cenguigui.cn/?id=22837479&type=lyr&format=all");
-            // ESP_LOGD(TAG, "response=%s", response.c_str());
-
-            auto* http_stream = new HttpStream();
-            auto hs = http_stream->Open(
-                "http://kw-api.cenguigui.cn?id=228908&type=song&level=exhigh&format=mp3");
-            ESP_LOGI(TAG, "HttpStream open=%d", hs);
-            vTaskDelay(pdMS_TO_TICKS(30000));
-            vTaskDelete(nullptr);
-        },
-        "http_task", 4096, nullptr, 5, nullptr);
-    vTaskDelay(pdMS_TO_TICKS(5000));
-}
-#endif
 
 Application::Application() {
     event_group_ = xEventGroupCreate();
@@ -220,9 +170,6 @@ void Application::Initialize() {
 #if CONFIG_ENABLE_ALARM
     AlarmManager::GetInstance().Initialize();
 #endif
-#if TEST
-    testNoNetwork();
-#endif
 }
 
 void Application::Run() {
@@ -338,12 +285,6 @@ void Application::Run() {
                 // SystemInfo::PrintTaskCpuUsage(pdMS_TO_TICKS(1000));
             }
         }
-
-#if CONFIG_ENABLE_ALARM
-        if (bits & MAIN_EVENT_ALARM_CLOCK_RINGING) {
-            AlarmEventConfig::GetInstance().HandleAlarmRingingEvent(aborted_, protocol_);
-        }
-#endif
     }
 }
 
@@ -423,12 +364,7 @@ void Application::ActivationTask() {
     InitializeProtocol();
 
 #if CONFIG_ENABLE_ALARM
-#if !TEST
     AlarmManager::GetInstance().LoadHolidays();
-#endif
-#endif
-#if TEST
-    testOnNetwork();
 #endif
     // Signal completion to main loop
     xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
@@ -927,14 +863,6 @@ void Application::HandleWakeWordDetectedEvent() {
         // Restart the activation check if the wake word is detected during activation
         SetDeviceState(kDeviceStateIdle);
     }
-#if CONFIG_ENABLE_ALARM
-    else if (state == kDeviceStateAlarmClock) {
-        if (AlarmEventConfig::GetInstance().HandleWakeWordDetected(wake_word, protocol_)) {
-            SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop
-                                                  : kListeningModeRealtime);
-        }
-    }
-#endif
 }
 
 void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
@@ -1030,11 +958,6 @@ void Application::HandleStateChangedEvent() {
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(false);
             break;
-#if CONFIG_ENABLE_ALARM
-        case kDeviceStateAlarmClock:
-            AlarmEventConfig::GetInstance().SetDeviceState();
-            break;
-#endif
 
         default:
             // Do nothing

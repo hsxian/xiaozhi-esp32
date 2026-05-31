@@ -66,6 +66,18 @@ void AlarmManager::Initialize() {
 
     ESP_LOGI(TAG, "AlarmManager initialized with %d alarms", alarms_.size());
 }
+void PropertyListToAlarm(const PropertyList& properties, Alarm& alarm) {
+    alarm.id = properties["id"].value<std::string>();
+    alarm.name = properties["name"].value<std::string>();
+    alarm.hour = properties["hour"].value<int>();
+    alarm.minute = properties["minute"].value<int>();
+    alarm.second = properties["second"].value<int>();
+    alarm.volume = properties["volume"].value<int>();
+    alarm.repeat_mode = (RepeatMode)properties["repeat_mode"].value<int>();
+    alarm.repeat_days = properties["repeat_days"].value<int>();
+}
+
+
 
 void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
     // std::string id;          // 闹钟唯一ID
@@ -77,6 +89,15 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
     // RepeatMode repeat_mode;  // 重复模式
     // int repeat_days;         // 自定义重复日期（周日到周六，共7天,每个位表示一个天）
 
+    PropertyList property_list({Property("id", kPropertyTypeString),
+                                Property("name", kPropertyTypeString),
+                                Property("hour", kPropertyTypeInteger, 0, 23),
+                                Property("minute", kPropertyTypeInteger, 0, 59),
+                                Property("second", kPropertyTypeInteger, 0, 59),
+                                Property("volume", kPropertyTypeInteger, 90, 0, 100),
+                                Property("repeat_mode", kPropertyTypeInteger, 0, 4),
+                                Property("repeat_days", kPropertyTypeInteger, 0, 127)});
+
     auto tool = new McpTool(
         "self.alarm_clock.add",
         "This alarm clock is defined by a structured data model designed for precision and "
@@ -87,26 +108,31 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         "which supports single occurrences (ONCE), daily repeats (DAILY), workday-only schedules "
         "(WORKDAYS), holidays (HOLIDAYS), or fully customized patterns (CUSTOM). For custom "
         "setups, the repeat_days integer acts as a bitmask covering "
-        "Sunday(1)、Monday(2)、Tuesday(4)、Wednesday(8)、Thursday(16)、Friday(32) and "
-        "Saturday(64), "
-        "allowing users to select specific days of the week for the alarm to trigger.",
-        PropertyList({Property("id", kPropertyTypeString), Property("name", kPropertyTypeString),
-                      Property("hour", kPropertyTypeInteger, 0, 23),
-                      Property("minute", kPropertyTypeInteger, 0, 59),
-                      Property("second", kPropertyTypeInteger, 0, 59),
-                      Property("volume", kPropertyTypeInteger, 90, 0, 100),
-                      Property("repeat_mode", kPropertyTypeInteger, 0, 4),
-                      Property("repeat_days", kPropertyTypeInteger, 0, 127)}),
+        "Sunday(1)、Monday(2)、Tuesday(4)、Wednesday(8)、Thursday(16)、Friday(32) and  Saturday(64),"
+        " allowing users to select specific days of the week for the alarm to trigger.",
+        property_list,
         [this](const PropertyList& properties) -> ReturnValue {
             ESP_LOGI(TAG, "Add alarm");
-            Alarm alarm(properties["id"].value<std::string>(),
-                        properties["name"].value<std::string>(), properties["hour"].value<int>(),
-                        properties["minute"].value<int>(), properties["second"].value<int>(),
-                        properties["volume"].value<int>(),
-                        (RepeatMode)properties["repeat_mode"].value<int>(),
-                        properties["repeat_days"].value<int>());
-
+            Alarm alarm;
+            PropertyListToAlarm(properties, alarm);
             AddAlarm(alarm);
+            return alarm.ToJson();
+        });
+    auto tool = new McpTool(
+        "self.alarm_clock.update",
+        "Update the alarm clock settings. You can use self.alarm_clock.find to query the alarm ID "
+        "and other properties beforehand, then use this tool to update the alarm. When "
+        "updating, you need to provide the alarm ID and the properties to be updated. If a certain "
+        "property does not need to be updated, you can keep it the same as before or use the "
+        "default value. Note that alarms are based on absolute time. If you need to set a relative "
+        "time, you need to first get the current time (for example, it's 10:00:00 now), add the "
+        "setting value (for example, 10 minutes), and set it to 10:10:00.",
+        property_list,
+        [this](const PropertyList& properties) -> ReturnValue {
+            ESP_LOGI(TAG, "Update alarm");
+            Alarm alarm;
+            PropertyListToAlarm(properties, alarm);
+            UpdateAlarm(alarm);
             return alarm.ToJson();
         });
     tools.push_back(tool);
@@ -249,6 +275,11 @@ void AlarmManager::LoadHolidays() {
     struct tm tm;
     localtime_r(&now, &tm);
     int current_year = tm.tm_year + 1900;
+
+    // auto al = new Alarm("4", "4", tm.tm_hour, tm.tm_min, tm.tm_sec, 40, RepeatMode::ONCE);
+    // alarms_.push_back(al);
+    // UpdateTimerLocked();
+    // return;
 
     // 网络获取节假日配置
     std::string url =

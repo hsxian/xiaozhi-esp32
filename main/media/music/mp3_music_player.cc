@@ -231,8 +231,11 @@ void Mp3MusicPlayer::PlayMusicLoop() {
                                ? shuffle_order[current_track_index_]
                                : current_track_index_.load();
         auto* music = current_music_list_[actual_index];
-        ESP_LOGI(TAG, "Playing track %d/%d [actual=%d]: %s", 1 + current_track_index_,
-                 playlist_size, actual_index, music->ToString().c_str());
+        auto msg = std::format("Playing track {}/{} [actual={}]: {}",
+                              1 + current_track_index_, playlist_size, actual_index, music->ToString()).c_str();
+        ESP_LOGI(TAG, "%s", msg);
+        display_->SetChatMessage("music", msg);
+
 
         // 初始播放准备
         PreparePlayState();

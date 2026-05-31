@@ -321,10 +321,13 @@ void Mp3MusicPlayer::DecodePlayLoop(const Music& music) {
             http_stream_->Open(music.url, http_stream_->GetDownloadBytesReceived());
         }
 
-        // 从队列获取数据 - 使用较长超时时间确保能获取到数据
+        // 从队列获取数据 - 缓冲区充足时用长超时批处理，不足时用短超时防止DMA饥饿
         DataChunk chunk;
-        BaseType_t recv_result = xQueueReceive(mp3_queue, &chunk, pdMS_TO_TICKS(500));
+        // 仅在真正危急(mp3_data_size < 512)时用短超时，避免频繁轮询导致AFE任务饿死
+        TickType_t recv_timeout = (mp3_data_size < 512) ? pdMS_TO_TICKS(60) : pdMS_TO_TICKS(500);
+        BaseType_t recv_result = xQueueReceive(mp3_queue, &chunk, recv_timeout);
         if (recv_result == pdPASS) {
+            was_outputting_silence_ = false;  // 收到新数据，退出静音状态
             if (!ProcessReceivedChunk(chunk, mp3_buffer, mp3_data_offset, mp3_data_size,
                                       track_complete, track_error, "Received")) {
                 break;
@@ -341,10 +344,36 @@ void Mp3MusicPlayer::DecodePlayLoop(const Music& music) {
 
             // 保持AudioPowerCheck活跃，即使队列为空也定期更新
             audio_service.UpdateLastOutputTime();
-            // 缓冲区数据不足时继续等待，不要跳过
+            // 缓冲区数据不足时输出静音（带淡出过渡）防止 DMA 饥饿导致炸音
             if (mp3_data_size < 512) {
-                // ESP_LOGD(TAG, "Waiting for more data, buffered: %u",
-                //          (unsigned int)mp3_data_size);
+                // 输出80ms静音，在60ms超时周期内持续填充DMA防止下溢
+                int silence_samples = audio_codec_->output_sample_rate() *
+                                      audio_codec_->output_channels() * 80 / 1000;
+                if (silence_samples > 0 && silence_samples <= (int)output_pcm_buffer_.size()) {
+                    if (!was_outputting_silence_ && output_pcm_buffer_.size() > 0) {
+                        // 从音频切换到静音：利用output_pcm_buffer_中上次的PCM数据做淡出
+                        int valid = std::min((int)output_pcm_buffer_.size(), silence_samples);
+                        // 5ms线性淡出，从1.0渐变到0.0
+                        int fade_samples = audio_codec_->output_sample_rate() *
+                                           audio_codec_->output_channels() * 5 / 1000;
+                        if (fade_samples > valid) fade_samples = valid;
+                        for (int i = 0; i < fade_samples; i++) {
+                            int32_t gain = ((fade_samples - i) << 8) / fade_samples;
+                            output_pcm_buffer_[i] = (int16_t)((int32_t)output_pcm_buffer_[i] * gain >> 8);
+                        }
+                        // 淡出后剩余部分填零
+                        int remaining = silence_samples - fade_samples;
+                        if (remaining > 0) {
+                            memset(output_pcm_buffer_.data() + fade_samples, 0,
+                                   remaining * sizeof(int16_t));
+                        }
+                    } else {
+                        // 已在静音状态，直接输出静音
+                        memset(output_pcm_buffer_.data(), 0, silence_samples * sizeof(int16_t));
+                    }
+                    audio_codec_->OutputData(output_pcm_buffer_.data(), silence_samples);
+                    was_outputting_silence_ = true;
+                }
                 continue;
             }
         }
@@ -373,7 +402,23 @@ void Mp3MusicPlayer::DecodePlayLoop(const Music& music) {
         }
     }
 
-    // 清理解码器
+    // 清理解码器前先淡出，防止直接关闭编解码器产生炸音
+    if (!was_outputting_silence_ && output_pcm_buffer_.size() > 0) {
+        int fade_ms = 10;  // 10ms淡出
+        int fade_samples = audio_codec_->output_sample_rate() *
+                           audio_codec_->output_channels() * fade_ms / 1000;
+        if (fade_samples > (int)output_pcm_buffer_.size()) {
+            fade_samples = (int)output_pcm_buffer_.size();
+        }
+        if (fade_samples > 0) {
+            for (int i = 0; i < fade_samples; i++) {
+                int32_t gain = ((fade_samples - i) << 8) / fade_samples;
+                output_pcm_buffer_[i] = (int16_t)((int32_t)output_pcm_buffer_[i] * gain >> 8);
+            }
+            audio_codec_->OutputData(output_pcm_buffer_.data(), fade_samples);
+            vTaskDelay(pdMS_TO_TICKS(fade_ms + 5));  // 等待淡出播放完成
+        }
+    }
     MP3FreeDecoder(decoder);
     audio_codec_->EnableOutput(false);
     // 清空队列中剩余数据
@@ -434,6 +479,13 @@ void Mp3MusicPlayer::ConvertPcmIfNeeded(const MP3FrameInfo& frame_info,
     int input_rate = frame_info.samprate;
     int input_channels = frame_info.nChans;
     int input_frames = frame_info.outputSamps / input_channels;
+
+    // 防御性检查：防止非法 frame_info 导致除零或越界崩溃
+    if (input_channels <= 0 || input_rate <= 0 || input_frames <= 0) {
+        ESP_LOGE(TAG, "Invalid frame info: nChans=%d, samprate=%d, outputSamps=%d",
+                 frame_info.nChans, frame_info.samprate, frame_info.outputSamps);
+        return;
+    }
 
     bool need_rate_conversion = (input_rate != codec_output_rate && codec_output_rate > 0);
     bool need_channel_conversion =
@@ -570,6 +622,16 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t
 
         ESP_LOGW(TAG, "MP3Decode failed with error code: %d, skipping 1 byte", samples_decoded);
 
+        // 对于非 INVALID_FRAMEHEADER 的错误，MP3ClearBadFrame 已将 pcm_buffer 清零
+        // 输出这些静音数据以保持音频时间线连续，防止炸音
+        if (samples_decoded != ERR_MP3_INVALID_FRAMEHEADER) {
+            MP3FrameInfo error_fi;
+            MP3GetLastFrameInfo(decoder, &error_fi);
+            if (error_fi.outputSamps > 0 && error_fi.nChans > 0 && error_fi.outputSamps <= (int)(PCM_BUFFER_SIZE / 2)) {
+                audio_codec_->OutputData(pcm_buffer.data(), error_fi.outputSamps);
+            }
+        }
+
         // 解码失败，跳过一个字节并重新搜索
         if (mp3_data_size > 0) {
             mp3_data_offset++;
@@ -593,7 +655,7 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t
     consecutive_skip_count = 0;
 
     MP3FrameInfo frame_info;
-    MP3GetNextFrameInfo(decoder, &frame_info, pInData);
+    MP3GetLastFrameInfo(decoder, &frame_info);
     int bytes_consumed = mp3_data_size - nBytesLeft;
     mp3_data_offset += bytes_consumed;
     mp3_data_size = nBytesLeft;
@@ -625,13 +687,31 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t
     }
 
     if (output_samples > 0 && play_state_ == PlayState::kPlaying) {
+        // 从静音恢复时做淡入，防止DC跳变炸音
+        if (was_outputting_silence_) {
+            int fade_samples = audio_codec_->output_sample_rate() *
+                               audio_codec_->output_channels() * 5 / 1000;  // 5ms淡入
+            if (fade_samples > output_samples) fade_samples = output_samples;
+            // 确定实际输出的PCM数据在哪个缓冲区
+            bool use_converted = !(output_samples == frame_info.outputSamps &&
+                                   output_channels == frame_info.nChans);
+            int16_t* out_data = use_converted ? output_pcm_buffer_.data() : pcm_buffer.data();
+            for (int i = 0; i < fade_samples; i++) {
+                int32_t gain = (i << 8) / fade_samples;
+                out_data[i] = (int16_t)((int32_t)out_data[i] * gain >> 8);
+            }
+        }
+
         if (output_samples == frame_info.outputSamps && output_channels == frame_info.nChans) {
-            // 不需要转换，直接输出
+            // 不需要转换，直接输出，同时更新output_pcm_buffer_供后续淡出使用
+            output_pcm_buffer_.resize(output_samples);
+            memcpy(output_pcm_buffer_.data(), pcm_buffer.data(), output_samples * sizeof(int16_t));
             audio_codec_->OutputData(pcm_buffer.data(), output_samples);
         } else {
-            // 使用转换后的PCM数据
+            // 使用转换后的PCM数据（已在output_pcm_buffer_中）
             audio_codec_->OutputData(output_pcm_buffer_.data(), output_samples);
         }
+        was_outputting_silence_ = false;
         // 保持AudioPowerCheck活跃
         Application::GetInstance().GetAudioService().UpdateLastOutputTime();
     }

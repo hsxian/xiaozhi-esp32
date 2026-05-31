@@ -31,13 +31,12 @@ public:
     void Play(const std::vector<const Music*>& music_list, LoopMode mode = LoopMode::kPlayOnce) override;
     bool ChangePlayControlMode(const PlayControlMode& mode) override;
 
-private:
+private :
     // 处理接收到的MP3数据块，返回是否继续处理（true=继续，false=结束）
     bool ProcessReceivedChunk(DataChunk& chunk, std::vector<uint8_t>& mp3_buffer,
-                              size_t& mp3_data_offset, size_t& mp3_data_size,
-                              bool& track_complete, bool& track_error,
-                              const char* log_tag = "Received");
-    
+                              size_t& mp3_data_offset, size_t& mp3_data_size, bool& track_complete,
+                              bool& track_error, const char* log_tag = "Received");
+
     // 解码播放线程函数
     static void PlayMusicTask(void* arg);
     void PlayMusicLoop();
@@ -75,14 +74,6 @@ private:
     static constexpr int HIGH_WATER_MARK = 8;          // 降低高水位标记，更早开始节流
     static constexpr int CRITICAL_WATER_MARK = 14;     // 临界水位，接近满队列
 
-    // 播放器状态
-    enum class PlayState : uint8_t {
-        kIdle,     // 空闲
-        kPlaying,  // 播放中
-        kPausing,  // 暂停请求中（等待解码线程确认）
-        kPaused,   // 已暂停（解码线程已确认）
-        kResuming,    // 恢复请求中（等待解码线程确认）
-    };
 
     bool IsPlaying() const override {
         return play_state_ != PlayState::kIdle;
@@ -90,7 +81,6 @@ private:
 
     AudioCodec* audio_codec_{nullptr};
     Display* display_{nullptr};
-    std::atomic<PlayState> play_state_{PlayState::kIdle};
     std::mutex mutex_;
     std::condition_variable pause_cv_;
     std::vector<const Music*> current_music_list_;
@@ -110,4 +100,7 @@ private:
     // 预分配的PCM输出缓冲区，避免运行时内存分配失败
     static constexpr int MAX_PCM_OUTPUT_SAMPLES = 8192;  // 最大PCM输出样本数
     std::vector<int16_t> output_pcm_buffer_;  // 预分配的输出缓冲区
+
+    // 静音状态追踪，用于淡入淡出过渡防止炸音
+    bool was_outputting_silence_ = false;
 };

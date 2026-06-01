@@ -53,6 +53,7 @@ struct Alarm {
     // 从JSON字符串解析
     bool FromJson(const std::string& json);
     time_t toTime(const time_t& now) const;
+    std::string ToString() const;
 };
 
 // 节假日结构体

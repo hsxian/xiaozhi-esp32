@@ -1,6 +1,7 @@
 #include "alarm.h"
 #include <esp_log.h>
 #include <cJSON.h>
+#include <format>
 
 #define TAG "Alarm"
 
@@ -18,22 +19,22 @@ Alarm::Alarm()
 
 // 带参数构造函数
 Alarm::Alarm(const std::string& alarm_id, const std::string& alarm_name, int h, int m, int s,
-               int vol, RepeatMode mode, int repeat_days)
-        : id(alarm_id),
-          name(alarm_name),
-          hour(h),
-          minute(m),
-          second(s),
-          volume(vol),
-          repeat_mode(mode),
-          repeat_days(repeat_days),
-          state(AlarmState::ENABLED),
-          snooze_duration(2),
-          snooze_count(6) {
+             int vol, RepeatMode mode, int repeat_days)
+    : id(alarm_id),
+      name(alarm_name),
+      hour(h),
+      minute(m),
+      second(s),
+      volume(vol),
+      repeat_mode(mode),
+      repeat_days(repeat_days),
+      state(AlarmState::ENABLED),
+      snooze_duration(2),
+      snooze_count(6) {
     ESP_LOGI(TAG,
              "Alarm created: %s(%s), %02d:%02d:%02d, volume: %d, repeat mode: %d, repeat days: %d",
              name.c_str(), id.c_str(), hour, minute, second, volume, repeat_mode, repeat_days);
-          }
+}
 
 // 转换为JSON字符串
 std::string Alarm::ToJson() const {
@@ -98,8 +99,8 @@ time_t Alarm::toTime(const time_t& now) const {
     alarm_tm.tm_sec = second;
 
     time_t alarm_time = mktime(&alarm_tm);
-    int64_t now_s = (int64_t)now ;
-    int64_t alarm_s =(int64_t)alarm_time ;
+    int64_t now_s = (int64_t)now;
+    int64_t alarm_s = (int64_t)alarm_time;
     return alarm_s;
 }
 
@@ -123,4 +124,33 @@ std::vector<Alarm*> Alarm::findByName(std::vector<Alarm*>& alarms, const std::st
         }
     }
     return found_alarms;
+}
+
+std::string Alarm::ToString() const {
+    
+    std::string week = "";
+    if (repeat_mode == RepeatMode::CUSTOM) {
+        if (repeat_days == 127) {
+            week = "(Every day)";
+        } else if (repeat_days == 0) {
+            week = "(repeat days value error)";
+        } else {
+            static const char* week_names[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+            for (int i = 0; i < 7; i++) {
+                if (repeat_days & (1 << i)) {
+                    week += week_names[i];
+                    week += " ";
+                }
+            }
+            week = "(" + week + ")";
+        }
+    }
+
+    std::string ret = std::format(
+        "Alarm(id={}, name={}, time={:02d}:{:02d}:{:02d}, volume={}, repeat_mode={}, "
+        "repeat_days={}{}, snooze_duration={}min, snooze_count={})",
+        id, name, hour, minute, second, volume, (int)repeat_mode, repeat_days, week,
+        snooze_duration, snooze_count);
+
+    return ret;
 }

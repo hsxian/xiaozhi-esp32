@@ -5,7 +5,6 @@
 #include <atomic>
 #include <mutex>
 #include "music.h"
-#include "device_state.h"
 
 class McpTool;
 class MusicPlayer;

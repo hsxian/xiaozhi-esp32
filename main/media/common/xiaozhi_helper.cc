@@ -13,15 +13,19 @@ bool XiaozhiHelper::IsNeedWaitDeviceIdleState() const {
     return app.GetDeviceState() != kDeviceStateIdle;  // 检查更新后的状态
 }
 
-void XiaozhiHelper::ReRaiseWakeWordDetectedInTask() const {
+void XiaozhiHelper::ReRaiseWakeWordDetectedInTask(const std::function<void()>& callback) const {
+    std::function<void()>* callback_ptr = new std::function<void()>(callback);
     xTaskCreate(
         [](void* pvParameters) {
+            std::function<void()>* callback = static_cast<std::function<void()>*>(pvParameters);
             vTaskDelay(pdMS_TO_TICKS(1500));
             auto& app = Application::GetInstance();
             app.ClearEventFromGroup(MAIN_EVENT_WAKE_WORD_DETECTED);
             vTaskDelay(pdMS_TO_TICKS(1000));
             app.AppendEventToGroup(MAIN_EVENT_WAKE_WORD_DETECTED);
+            if(callback && *callback) (*callback)();
+            delete callback;
             vTaskDelete(nullptr);
         },
-        "OnWakeWordDetectedTask", 2048, nullptr, 5, nullptr);
+        "OnWakeWordDetectedTask", 2048, callback_ptr, 5, nullptr);
 }

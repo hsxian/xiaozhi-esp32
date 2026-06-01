@@ -116,9 +116,10 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
             Alarm alarm;
             PropertyListToAlarm(properties, alarm);
             AddAlarm(alarm);
-            return alarm.ToJson();
+            return "Alarm added: " + alarm.ToString();
         });
-    auto tool = new McpTool(
+    tools.push_back(tool);
+    tool = new McpTool(
         "self.alarm_clock.update",
         "Update the alarm clock settings. You can use self.alarm_clock.find to query the alarm ID "
         "and other properties beforehand, then use this tool to update the alarm. When "
@@ -133,7 +134,7 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
             Alarm alarm;
             PropertyListToAlarm(properties, alarm);
             UpdateAlarm(alarm);
-            return alarm.ToJson();
+            return "Alarm updated: " + alarm.ToString();
         });
     tools.push_back(tool);
     tool = new McpTool(
@@ -457,7 +458,6 @@ void AlarmManager::StopRinging() {
 
         current_ringing_alarm_ = nullptr;
         UpdateTimerLocked();
-        auto& app = Application::GetInstance();
         ESP_LOGI(TAG, "Alarm stopped");
     }
 }
@@ -798,7 +798,9 @@ bool AlarmManager::OnWakeWordDetected(void* data) {
     StopRinging();
     ESP_LOGI(TAG, "Wake word detected, stopping alarm ringing");
 
-    XiaozhiHelper helper;
-    helper.ReRaiseWakeWordDetectedInTask();
+    auto helper = new XiaozhiHelper();
+    helper->ReRaiseWakeWordDetectedInTask([helper]() {
+        delete helper;
+    });
     return true;
 }

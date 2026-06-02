@@ -232,9 +232,10 @@ void Mp3MusicPlayer::PlayMusicLoop() {
                                : current_track_index_.load();
         auto* music = current_music_list_[actual_index];
         auto msg = std::format("Playing track {}/{} [actual={}]: {}",
-                              1 + current_track_index_, playlist_size, actual_index, music->ToString()).c_str();
-        ESP_LOGI(TAG, "%s", msg);
-        display_->SetChatMessage("music", msg);
+                              1 + current_track_index_, playlist_size, actual_index, music->ToString());
+        auto msg_src = msg.c_str();
+        ESP_LOGI(TAG, "%s", msg_src);
+        display_->SetChatMessage("music", msg_src);
 
 
         // 初始播放准备
@@ -393,6 +394,7 @@ void Mp3MusicPlayer::DecodePlayLoop(const Music& music) {
             if (!DecodeAndPlayFrame(decoder, mp3_buffer, mp3_data_offset, mp3_data_size, pcm_buffer,
                                     consecutive_skip_count)) {
                 ESP_LOGW(TAG, "Decode failed, skipping");
+                track_error = true;  // 设置错误标志，使外层循环退出并切换到下一首
                 break;
             }
 
@@ -860,15 +862,7 @@ bool Mp3MusicPlayer::OnWakeWordDetected(void* data) {
         xSemaphoreTake(pause_ack_semaphore_, pdMS_TO_TICKS(1000));
     }
     ESP_LOGI(TAG, "Wake word detected, pausing music");
-    xTaskCreate(
-        [](void* pvParameters) {
-            vTaskDelay(pdMS_TO_TICKS(1500));
-            auto& app = Application::GetInstance();
-            app.ClearEventFromGroup(MAIN_EVENT_WAKE_WORD_DETECTED);
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            app.AppendEventToGroup(MAIN_EVENT_WAKE_WORD_DETECTED);
-            vTaskDelete(nullptr);
-        },
-        "OnWakeWordDetectedTask", 2048, this, 5, nullptr);
+    auto helper = new XiaozhiHelper();
+    helper->ReRaiseWakeWordDetectedInTask([helper]() { delete helper; });
     return true;
 }

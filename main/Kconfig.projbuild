@@ -1080,5 +1080,13 @@ menu "Personal Development Configuration"
                 help
                     kw music address, format: http://IP:PORT/
         endmenu
+
+        menu "Bluetooth Speaker Configuration"
+            config ENABLE_BLUETOOTH_SPEAKER
+                bool "Enable Bluetooth Speaker"
+                default n
+                help 
+                    Enable bluetooth speaker.
+        endmenu    
     endif
 endmenu

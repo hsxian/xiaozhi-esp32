@@ -144,7 +144,7 @@ dependencies:
     version: '*'
 
   chmorgan/esp-libhelix-mp3:
-    version: "*"
+    version: '*'
     rules:
     - if: target in [esp32s3, esp32p4]
 

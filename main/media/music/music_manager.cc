@@ -233,8 +233,9 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
 }
 
 void MusicManager::TryResleaseMusicPlayer() {
-    if (music_player_ && !music_player_->IsPlaying()) {
-        delete music_player_;
-        music_player_ = nullptr;
+    if (!music_player_) {
+        return;
     }
+    delete music_player_;
+    music_player_ = nullptr;
 }

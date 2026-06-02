@@ -1,15 +1,16 @@
 #pragma once
 
+#include <atomic>
+#include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
-#include <mutex>
-#include <atomic>
-#include "esp_a2dp_api.h"
-#include "esp_bt_device.h"
 
-class McpTool;
+// Forward declarations for NimBLE types
+struct ble_gap_conn_desc;
 class AudioCodec;
 class Display;
+class McpTool;
 
 class BluetoothManager {
 public:
@@ -34,43 +35,37 @@ private:
     BluetoothManager();
     ~BluetoothManager();
 
-    // BT stack lifecycle helpers
+    // BT stack lifecycle helpers (NimBLE BLE Audio)
     bool InitBluetoothStack();
     void DeinitBluetoothStack();
-    bool StartA2dpSink();
-    void StopA2dpSink();
 
-    // A2DP callbacks (static trampolines, called in BTU task context)
-    static void A2dpCallback(esp_a2d_cb_event_t event, esp_a2d_cb_param_t* param);
-    static void AudioDataCallback(esp_a2d_conn_hdl_t conn_hdl, esp_a2d_audio_buff_t* audio_buf);
+    // NimBLE task
+    static void NimbleTask(void* param);
 
-    // Internal state handlers (called from A2dpCallback)
-    void OnConnectionStateChanged(esp_a2d_cb_param_t* param);
-    void OnAudioStateChanged(esp_a2d_cb_param_t* param);
-    void OnAudioConfigChanged(esp_a2d_cb_param_t* param);
+    // A2DP BLE Audio callbacks
+    static void OnA2dpEvent(int event, void* param);
+    static void OnAudioData(const uint8_t* data, size_t len);
+
+    // Audio output
+    void WriteAudioToCodec(const uint8_t* data, size_t len);
 
     // MCP tool callbacks
     std::string OnToolGetStatus();
     std::string OnToolControl(bool enable);
     std::string OnToolSetVolume(int volume);
 
-    // Audio output
-    void WriteAudioToCodec(const uint8_t* data, size_t len);
-
     // State
     bool initialized_ = false;
     bool bluetooth_started_ = false;
-    bool host_owned_by_us_ = false;  // true if we called esp_bluedroid_init()
     std::atomic<bool> enabled_{false};
     std::atomic<bool> connected_{false};
     std::atomic<bool> audio_streaming_{false};
 
     // Connected device info (protected by mutex_)
-    mutable std::mutex mutex_;
     std::string device_name_;
-    esp_bd_addr_t peer_bda_;
+    uint8_t peer_bda_[6];  // BLE address (6 bytes)
 
-    // Audio config received from A2DP
+    // Audio config received from BLE Audio
     int audio_sample_rate_ = 44100;
     int audio_channels_ = 2;
 

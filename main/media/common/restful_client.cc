@@ -134,7 +134,7 @@ std::string RestfulClient::Get(const std::string& url) {
 
     ESP_LOGI(TAG, "HTTP GET request => %s", url_str);
     // GET 请求
-    auto err = PerformLoop(client, dc, "HTTP GET");
+    PerformLoop(client, dc, "HTTP GET");
 
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
@@ -151,7 +151,7 @@ std::string RestfulClient::Post(const std::string& url, const std::string& body,
 
     ESP_LOGI(TAG, "HTTP POST request => %s", url_str);
     // POST 请求
-    auto err = PerformLoop(client, dc, "HTTP POST");
+    PerformLoop(client, dc, "HTTP POST");
 
     esp_http_client_close(client);
     esp_http_client_cleanup(client);

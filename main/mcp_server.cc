@@ -23,6 +23,9 @@
 #if CONFIG_ENABLE_MUSIC
 #include "media/music/music_manager.h"
 #endif
+#if CONFIG_ENABLE_BLUETOOTH_SPEAKER
+#include "media/bluetooth/bluetooth_manager.h"
+#endif
 
 #define TAG "MCP"
 
@@ -90,6 +93,9 @@ void McpServer::AddCommonTools() {
 #endif
 #if CONFIG_ENABLE_MUSIC
     MusicManager::GetInstance().GenerateMcpServerTools(tools);
+#endif
+#if CONFIG_ENABLE_BLUETOOTH_SPEAKER
+    BluetoothManager::GetInstance().GenerateMcpServerTools(tools);
 #endif
     for (auto tool : tools) {
         AddTool(tool);

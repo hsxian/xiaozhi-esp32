@@ -99,9 +99,7 @@ time_t Alarm::toTime(const time_t& now) const {
     alarm_tm.tm_sec = second;
 
     time_t alarm_time = mktime(&alarm_tm);
-    int64_t now_s = (int64_t)now;
-    int64_t alarm_s = (int64_t)alarm_time;
-    return alarm_s;
+    return alarm_time;
 }
 
 std::string Alarm::ToJsonArray(std::vector<Alarm*>& alarms) {

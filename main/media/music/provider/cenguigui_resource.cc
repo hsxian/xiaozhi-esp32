@@ -1,5 +1,7 @@
 #include "cenguigui_resource.h"
 
+#ifdef CONFIG_ENABLE_CENGUIGUI_RESOURCE
+
 #include <esp_log.h>
 #include <algorithm>
 #include <format>
@@ -90,3 +92,5 @@ std::string CenguiguiResource::GetUrl(Music& music) {
 std::string CenguiguiResource::GetLyricsUrl(Music& music) {
     return music.lrc;
 }
+
+#endif

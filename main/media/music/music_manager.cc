@@ -66,7 +66,6 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
             auto resource = MusicResource::NewMusicResource();
             std::vector<Music*> ms;
             resource->Search(query, ms);
-            delete resource;
             auto display = Board::GetInstance().GetDisplay();
             display->SetChatMessage(
                 "music", std::format("Search music result count: %d", ms.size()).c_str());

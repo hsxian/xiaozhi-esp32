@@ -1010,18 +1010,44 @@ menu "Personal Development Configuration"
                 default y
                 help 
                     Enable music.
-            config ENABLE_CENGUIGUI_RESOURCE
-                bool "Enable cenguiui Music Resource"
-                default y
-                depends on ENABLE_MUSIC
-                help
-                    Enable cenguiui music resource.
-            config CENGUIGUI_RESOURCE_ADDRESS
-                string "cenguiui Music Address"
-                default ""
-                depends on ENABLE_CENGUIGUI_RESOURCE
-                help
-                    cenguiui music address, format: http://IP:PORT/
+
+            if ENABLE_MUSIC
+                choice
+                    prompt "Music Resource"
+                    default ENABLE_CENGUIGUI_RESOURCE
+
+                    config ENABLE_CENGUIGUI_RESOURCE
+                        bool "cenguiui"
+                        help
+                            Enable cenguiui music resource.
+
+                    config ENABLE_SHANHAI_RESOURCE
+                        bool "shanghai"
+                        help
+                            Enable shanghai music resource.
+                endchoice
+
+                if ENABLE_CENGUIGUI_RESOURCE
+                    config CENGUIGUI_RESOURCE_ADDRESS
+                        string "cenguiui Music Address"
+                        default ""
+                        help
+                            cenguiui music address, format: http://IP:PORT/
+                endif
+
+                if ENABLE_SHANHAI_RESOURCE
+                    config SHANHAI_RESOURCE_ADDRESS
+                        string "shanghai Music Address"
+                        default ""
+                        help
+                            shanghai music address, format: http://IP:PORT/
+                    config SHANHAI_RESOURCE_API_KEY
+                        string "shanghai Music API Key"
+                        default ""
+                        help
+                            shanghai music API key
+                endif
+            endif
         endmenu
 
         menu "Bluetooth Speaker Configuration"

@@ -58,9 +58,8 @@ Mp3MusicPlayer::~Mp3MusicPlayer() {
 }
 
 void Mp3MusicPlayer::DownloadLyrics(Music& music) {
-    auto mr = MusicResource::NewMusicResource();
-    auto lyrics_url = mr->GetLyricsUrl(music);
-    delete mr;
+    auto resource = MusicResource::NewMusicResource();
+    auto lyrics_url = resource->GetLyricsUrl(music);
     if (lyrics_url.empty()) {
         ESP_LOGW(TAG, "No lyrics for music: %s", music.ToString().c_str());
         return;
@@ -81,9 +80,7 @@ void Mp3MusicPlayer::DownloadLyrics(Music& music) {
         is_downloading_lyrics_ = false;
         return;
     }
-    auto resource = MusicResource::NewMusicResource();
     resource->ParseLyricsFromJson(res, *lyrics_);
-    delete resource;
     is_downloading_lyrics_ = false;
 }
 
@@ -265,7 +262,6 @@ void Mp3MusicPlayer::DecodePlayLoop(Music& music) {
 
     auto mr = MusicResource::NewMusicResource();
     auto url = mr->GetUrl(music);
-    delete mr;
     http_stream_->Open(url);
 
     display_->SetChatMessage("music", ("Playing: " + music.ToString()).c_str());

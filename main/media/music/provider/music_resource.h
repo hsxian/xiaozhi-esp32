@@ -4,6 +4,7 @@
 #include "../music.h"
 #include "../../common/query_base.h"
 #include <vector>
+#include <memory>
 #include "../lyrics.h"
 
 class MusicResource {
@@ -15,7 +16,7 @@ public:
     virtual std::string GetLyricsUrl(Music& music) = 0;
     virtual void ParseMusicFromJson(cJSON* item, Music& music) = 0;
     virtual void ParseLyricsFromJson(const std::string& json, Lyrics& lyrics) = 0;
-    static MusicResource* NewMusicResource();
+    static std::unique_ptr<MusicResource> NewMusicResource();
 
 private:
 };

@@ -26,8 +26,8 @@ public:
     Mp3MusicPlayer();
     ~Mp3MusicPlayer();
 
-    bool Play(const Music* music, LoopMode mode = LoopMode::kPlayOnce) override;
-    void Play(const std::vector<const Music*>& music_list,
+    bool Play(Music* music, LoopMode mode = LoopMode::kPlayOnce) override;
+    void Play(const std::vector<Music*>& music_list,
               LoopMode mode = LoopMode::kPlayOnce) override;
     bool ChangePlayControlMode(const PlayControlMode& mode) override;
 
@@ -40,7 +40,7 @@ private:
     // 解码播放线程函数
     static void PlayMusicTask(void* arg);
     void PlayMusicLoop();
-    void DecodePlayLoop(const Music& music);
+    void DecodePlayLoop(Music& music);
 
     // 播放控制函数
     void SkipId3Tag(std::vector<uint8_t>& mp3_buffer, size_t& mp3_data_size,
@@ -59,7 +59,7 @@ private:
 
     void UpdateTimeInfo(int codec_output_rate, int output_samples, int output_channels,
                         const MP3FrameInfo& frame_info);
-    void DownloadLyrics(const Music& music);
+    void DownloadLyrics(Music& music);
     void ShowLyrics();
     bool HandleControlSignal();
     bool BreakDecodePlayLoop();
@@ -80,7 +80,7 @@ private:
     Display* display_{nullptr};
     std::mutex mutex_;
     std::condition_variable pause_cv_;
-    std::vector<const Music*> current_music_list_;
+    std::vector<Music*> current_music_list_;
     std::atomic<MusicPlayer::PlayControlMode> current_control_mode_{
         MusicPlayer::PlayControlMode::kUnknown};
     Lyrics* lyrics_{nullptr};

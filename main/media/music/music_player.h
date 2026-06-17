@@ -32,8 +32,8 @@ public:
         kResuming,    // 恢复请求中（等待解码线程确认）
     };
 
-    virtual bool Play(const Music* music, LoopMode mode = LoopMode::kPlayOnce) = 0;
-    virtual void Play(const std::vector<const Music*>& music_list, LoopMode mode = LoopMode::kPlayOnce) = 0;
+    virtual bool Play(Music* music, LoopMode mode = LoopMode::kPlayOnce) = 0;
+    virtual void Play(const std::vector<Music*>& music_list, LoopMode mode = LoopMode::kPlayOnce) = 0;
     virtual bool ChangePlayControlMode(const PlayControlMode& mode) = 0;
     LoopMode GetLoopMode() const { return loop_mode_; }
     int32_t current_position_ms() const { return current_position_ms_; }

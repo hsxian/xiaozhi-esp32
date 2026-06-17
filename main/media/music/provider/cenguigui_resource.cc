@@ -83,3 +83,10 @@ void CenguiguiResource::ParseLyricsFromJson(const std::string& json, Lyrics& lyr
     cJSON_Delete(json_obj);
 }
 void CenguiguiResource::ParseMusicFromJson(cJSON* item, Music& music) { music.FromJson(item); }
+
+std::string CenguiguiResource::GetUrl(Music& music) {
+    return music.url;
+}
+std::string CenguiguiResource::GetLyricsUrl(Music& music) {
+    return music.lrc;
+}

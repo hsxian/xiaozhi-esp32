@@ -8,15 +8,19 @@
 
 #define TAG "Music"
 
+void Music::ToJsonSimple(cJSON* root) const {
+    cJSON_AddStringToObject(root, "name", name.c_str());
+    cJSON_AddStringToObject(root, "artist", artist.c_str());
+    cJSON_AddStringToObject(root, "album", album.c_str());
+}
+
 void Music::ToJson(cJSON* root) const {
     cJSON_AddNumberToObject(root, "rid", rid);
     cJSON_AddStringToObject(root, "pic", pic.c_str());
     cJSON_AddStringToObject(root, "vid", vid.c_str());
-    cJSON_AddStringToObject(root, "name", name.c_str());
-    cJSON_AddStringToObject(root, "artist", artist.c_str());
-    cJSON_AddStringToObject(root, "album", album.c_str());
     cJSON_AddStringToObject(root, "lrc", lrc.c_str());
     cJSON_AddStringToObject(root, "url", url.c_str());
+    ToJsonSimple(root);
 }
 std::string Music::ToJson() const {
     cJSON* root = cJSON_CreateObject();

@@ -17,6 +17,9 @@
 #include "settings.h"
 #include "lvgl_theme.h"
 #include "lvgl_display.h"
+
+#if CONFIG_ENABLE_PERSONAL_DEVELOPMENT
+#include "media/common/misc_manager.h"
 #if CONFIG_ENABLE_ALARM
 #include "media/alarm/alarm_manager.h"
 #endif
@@ -26,7 +29,7 @@
 #if CONFIG_ENABLE_BLUETOOTH_SPEAKER
 #include "media/bluetooth/bluetooth_manager.h"
 #endif
-
+#endif
 #define TAG "MCP"
 
 McpServer::McpServer() {
@@ -88,6 +91,7 @@ void McpServer::AddCommonTools() {
 
 #if CONFIG_ENABLE_PERSONAL_DEVELOPMENT
     std::vector<McpTool*> tools;
+    MiscManager::GetInstance().GenerateMcpServerTools(tools);
 #if CONFIG_ENABLE_ALARM
     AlarmManager::GetInstance().GenerateMcpServerTools(tools);
 #endif

@@ -1,10 +1,10 @@
 #pragma once
 
 #include <string>
-#include "music.h"
-#include "../common/query_base.h"
+#include "../music.h"
+#include "../../common/query_base.h"
 #include <vector>
-#include "lyrics.h"
+#include "../lyrics.h"
 
 class MusicResource {
 public:

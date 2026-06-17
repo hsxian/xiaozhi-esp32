@@ -13,7 +13,7 @@
 #include "media/common/restful_client.h"
 #include "media/common/string_helper.h"
 #include "media/common/xiaozhi_helper.h"
-#include "music_resource.h"
+#include "provider/music_resource.h"
 
 extern "C" {
 #include <mp3dec.h>

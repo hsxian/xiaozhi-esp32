@@ -57,8 +57,11 @@ Mp3MusicPlayer::~Mp3MusicPlayer() {
     http_stream_ = nullptr;
 }
 
-void Mp3MusicPlayer::DownloadLyrics(const Music& music) {
-    if (music.lrc.empty()) {
+void Mp3MusicPlayer::DownloadLyrics(Music& music) {
+    auto mr = MusicResource::NewMusicResource();
+    auto lyrics_url = mr->GetLyricsUrl(music);
+    delete mr;
+    if (lyrics_url.empty()) {
         ESP_LOGW(TAG, "No lyrics for music: %s", music.ToString().c_str());
         return;
     }
@@ -72,7 +75,7 @@ void Mp3MusicPlayer::DownloadLyrics(const Music& music) {
     lyrics_->Clear();
 
     RestfulClient client;
-    auto res = client.Get(music.lrc);
+    auto res = client.Get(lyrics_url);
     if (res.empty()) {
         ESP_LOGE(TAG, "Failed to download lyrics for music: %s", music.ToString().c_str());
         is_downloading_lyrics_ = false;
@@ -101,14 +104,14 @@ void Mp3MusicPlayer::ShowLyrics() {
     display_->SetChatMessage("music", str);
 }
 
-bool Mp3MusicPlayer::Play(const Music* music, LoopMode mode) {
-    std::vector<const Music*> music_list = {music};
+bool Mp3MusicPlayer::Play(Music* music, LoopMode mode) {
+    std::vector<Music*> music_list = {music};
 
     Play(music_list, mode);
     return true;
 }
 
-void Mp3MusicPlayer::Play(const std::vector<const Music*>& music_list, LoopMode mode) {
+void Mp3MusicPlayer::Play(const std::vector<Music*>& music_list, LoopMode mode) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (IsPlaying()) {
@@ -255,12 +258,15 @@ void Mp3MusicPlayer::PlayMusicLoop() {
     board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
     ESP_LOGI(TAG, "Decode play task exiting");
 }
-void Mp3MusicPlayer::DecodePlayLoop(const Music& music) {
+void Mp3MusicPlayer::DecodePlayLoop(Music& music) {
     auto& app = Application::GetInstance();
     auto& audio_service = app.GetAudioService();
     auto& mp3_queue = http_stream_->GetDataQueue();
 
-    http_stream_->Open(music.url);
+    auto mr = MusicResource::NewMusicResource();
+    auto url = mr->GetUrl(music);
+    delete mr;
+    http_stream_->Open(url);
 
     display_->SetChatMessage("music", ("Playing: " + music.ToString()).c_str());
 
@@ -323,8 +329,8 @@ void Mp3MusicPlayer::DecodePlayLoop(const Music& music) {
             current_control_mode_ = PlayControlMode::kControlHandled;
             // 暂停恢复后准备播放状态
             PreparePlayState();
-            // 恢复 HTTP 下载，从断点继续
-            http_stream_->Open(music.url, http_stream_->GetDownloadBytesReceived());
+            // 恢复 HTTP 下载，从断点继续下载
+            http_stream_->Open(url, http_stream_->GetDownloadBytesReceived());
         }
 
         // 从队列获取数据 - 缓冲区充足时用长超时批处理，不足时用短超时防止DMA饥饿

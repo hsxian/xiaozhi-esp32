@@ -117,8 +117,7 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
 
             auto loop_mode =
                 static_cast<MusicPlayer::LoopMode>(properties["loopMode"].value<int>());
-            std::vector<const Music*> music_list_const(music_list_.begin(), music_list_.end());
-            music_player_->Play(music_list_const, loop_mode);
+            music_player_->Play(music_list_, loop_mode);
             const char* mode_names[] = {"play once", "loop", "shuffle"};
             return std::format("Music playback started ({})",
                                mode_names[properties["loopMode"].value<int>()]);

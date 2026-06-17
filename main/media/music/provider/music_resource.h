@@ -11,7 +11,7 @@ class MusicResource {
 public:
     virtual ~MusicResource() = default;
     virtual bool Search(const QueryBase& query, std::vector<Music*>& music_list) = 0;
-    virtual std::string Search(const std::string& params) = 0;
+    bool Search(const std::string& url, std::vector<Music*>& music_list);
     virtual std::string GetUrl(Music& music) = 0;
     virtual std::string GetLyricsUrl(Music& music) = 0;
     virtual void ParseMusicFromJson(cJSON* item, Music& music) = 0;

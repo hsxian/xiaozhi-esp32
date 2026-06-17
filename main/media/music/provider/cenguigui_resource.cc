@@ -1,4 +1,4 @@
-#include "kw_music_resource.h"
+#include "cenguigui_resource.h"
 
 #include <esp_log.h>
 #include <algorithm>
@@ -7,21 +7,21 @@
 #include "media/common/restful_client.h"
 #include "media/common/string_helper.h"
 
-#define TAG "KwMusicResource"
-#ifdef CONFIG_KW_MUSIC_ADDRESS
-_Static_assert(sizeof(CONFIG_KW_MUSIC_ADDRESS) > 1, "CONFIG_KW_MUSIC_ADDRESS不能为空");
+#define TAG "CenguiguiResource"
+#ifdef CONFIG_CENGUIGUI_RESOURCE_ADDRESS
+_Static_assert(sizeof(CONFIG_CENGUIGUI_RESOURCE_ADDRESS) > 1, "CONFIG_CENGUIGUI_RESOURCE_ADDRESS不能为空");
 #else
-#error "CONFIG_KW_MUSIC_ADDRESS is not defined"
+#error "CONFIG_CENGUIGUI_RESOURCE_ADDRESS is not defined"
 #endif
 // 辅助函数：替换字符串中的子串
 
-bool KwMusicResource::Search(const QueryBase& query, std::vector<Music*>& music_list) {
+bool CenguiguiResource::Search(const QueryBase& query, std::vector<Music*>& music_list) {
     RestfulClient restful_client;
-    std::string url = std::format("{}?name={}&page={}&limit={}", CONFIG_KW_MUSIC_ADDRESS,
+    std::string url = std::format("{}?name={}&page={}&limit={}", CONFIG_CENGUIGUI_RESOURCE_ADDRESS,
                                   query.keyword, query.page, query.page_size);
     ESP_LOGI(TAG, "url: %s", url.c_str());
     std::string keyword = restful_client.UrlEncode(query.keyword);
-    url = std::format("{}?name={}&page={}&limit={}", CONFIG_KW_MUSIC_ADDRESS, keyword, query.page,
+    url = std::format("{}?name={}&page={}&limit={}", CONFIG_CENGUIGUI_RESOURCE_ADDRESS, keyword, query.page,
                       query.page_size);
     bool success = false;
     std::string response = restful_client.Get(url);
@@ -51,9 +51,9 @@ bool KwMusicResource::Search(const QueryBase& query, std::vector<Music*>& music_
     return success;
 }
 
-std::string KwMusicResource::Search(const std::string& params) {
+std::string CenguiguiResource::Search(const std::string& params) {
     RestfulClient restful_client;
-    std::string url = std::format("{}?{}", CONFIG_KW_MUSIC_ADDRESS, params);
+    std::string url = std::format("{}?{}", CONFIG_CENGUIGUI_RESOURCE_ADDRESS, params);
     ESP_LOGI(TAG, "url: %s", url.c_str());
 
     std::string response = restful_client.Get(url);
@@ -65,7 +65,7 @@ std::string KwMusicResource::Search(const std::string& params) {
     return response;
 }
 
-void KwMusicResource::ParseLyricsFromJson(const std::string& json, Lyrics& lyrics) {
+void CenguiguiResource::ParseLyricsFromJson(const std::string& json, Lyrics& lyrics) {
     auto json_obj = cJSON_Parse(json.c_str());
     if (!json_obj) {
         ESP_LOGE(TAG, "Failed to parse JSON");
@@ -82,4 +82,4 @@ void KwMusicResource::ParseLyricsFromJson(const std::string& json, Lyrics& lyric
     }
     cJSON_Delete(json_obj);
 }
-void KwMusicResource::ParseMusicFromJson(cJSON* item, Music& music) { music.FromJson(item); }
+void CenguiguiResource::ParseMusicFromJson(cJSON* item, Music& music) { music.FromJson(item); }

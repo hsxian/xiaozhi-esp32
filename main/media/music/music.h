@@ -20,6 +20,7 @@ public:
     // 转换为JSON字符串
     std::string ToJson() const;
     void ToJson(cJSON* root) const;
+    void ToJsonSimple(cJSON* root) const;
     // 从JSON字符串解析
     bool FromJson(const std::string& json);
     void FromJson(const cJSON* item);

@@ -11,7 +11,7 @@
 #include "mcp_server.h"
 #include "media/common/restful_client.h"
 #include "mp3_music_player.h"
-#include "music_resource.h"
+#include "provider/music_resource.h"
 
 #define TAG "MusicManager"
 
@@ -79,13 +79,21 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
 
             music_helper.TryAdd(music_list_, ms, added_musics, failed_musics);
             music_helper.Release(failed_musics);
-            std::string msg = std::format("Added {} new song(s) to playlist, total {} song(s) : \n",
-                                          added_musics.size(), music_list_.size());
+            cJSON* root = cJSON_CreateObject();
+            cJSON_AddNumberToObject(root, "added_count", added_musics.size());
+            cJSON_AddNumberToObject(root, "total_count", music_list_.size());
 
+            cJSON* songs_array = cJSON_CreateArray();
             for (auto* music : added_musics) {
-                msg += music->ToString() + "\n";
+                cJSON* song_obj = cJSON_CreateObject();
+                music->ToJsonSimple(song_obj);
+                cJSON_AddItemToArray(songs_array, song_obj);
             }
-            return msg;
+            cJSON_AddItemToObject(root, "songs", songs_array);
+
+            auto json_str = cJSON_Print(root);
+            cJSON_Delete(root);
+            return json_str;
         });
     tools.push_back(tool);
 
@@ -160,7 +168,6 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                            MusicHelper music_helper;
                            auto result =
                                music_helper.Search(music_list_, keyword, 1, music_list_.size());
-                           // 只返回名称和歌手
                            if (result.empty()) {
                                return std::format("No music matching '{}'", keyword);
                            }
@@ -181,10 +188,11 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                 return "Playlist is empty";
             }
             auto display = Board::GetInstance().GetDisplay();
-            TryResleaseMusicPlayer();
             MusicHelper music_helper;
             // 关键字为空则清空全部歌单
             if (keyword.empty()) {
+                TryResleaseMusicPlayer();
+                vTaskDelay(pdMS_TO_TICKS(500));
                 int total = (int)music_list_.size();
                 music_helper.Release(music_list_);
                 auto msg = std::format("Cleared entire playlist, removed {} song(s)", total);
@@ -199,7 +207,8 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                 display->SetChatMessage("music", msg.c_str());
                 return msg;
             }
-
+            TryResleaseMusicPlayer();
+            vTaskDelay(pdMS_TO_TICKS(500));
             // 从music_list_中删除匹配的歌曲
             music_helper.Remove(music_list_, matches);
             auto msg = std::format("Removed {} song(s), remaining: {}", matches.size(),

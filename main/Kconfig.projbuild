@@ -1007,18 +1007,18 @@ menu "Personal Development Configuration"
                 default y
                 help 
                     Enable music.
-            config ENABLE_KW_MUSIC
-                bool "Enable kw Music Search"
+            config ENABLE_CENGUIGUI_RESOURCE
+                bool "Enable cenguiui Music Resource"
                 default y
                 depends on ENABLE_MUSIC
                 help
-                    Enable kw music.
-            config KW_MUSIC_ADDRESS
-                string "kw Music Address"
+                    Enable cenguiui music resource.
+            config CENGUIGUI_RESOURCE_ADDRESS
+                string "cenguiui Music Address"
                 default ""
-                depends on ENABLE_KW_MUSIC
+                depends on ENABLE_CENGUIGUI_RESOURCE
                 help
-                    kw music address, format: http://IP:PORT/
+                    cenguiui music address, format: http://IP:PORT/
         endmenu
 
         menu "Bluetooth Speaker Configuration"

@@ -2,13 +2,13 @@
 
 #include <string>
 #include <vector>
-#include "../common/query_base.h"
+#include "../../common/query_base.h"
 #include "music_resource.h"
-#include "lyrics.h"
+#include "../lyrics.h"
 
-class KwMusicResource : public MusicResource {
+class CenguiguiResource : public MusicResource {
 public:
-    virtual ~KwMusicResource() = default;
+    virtual ~CenguiguiResource() = default;
     virtual bool Search(const QueryBase& query, std::vector<Music*>& music_list) override;
     virtual std::string Search(const std::string & params) override;
     virtual void ParseMusicFromJson(cJSON* item, Music& music) override;

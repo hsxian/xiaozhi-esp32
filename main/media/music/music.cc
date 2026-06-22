@@ -1,4 +1,5 @@
 #include "music.h"
+#include <cstdlib>
 #include <format>
 #include <string>
 #include <vector>
@@ -42,9 +43,16 @@ bool Music::FromJson(const std::string& json) {
 }
 void Music::FromJson(const cJSON* item) {
     JsonHelper json_helper;
-    json_helper.GetNumber(item, "rid", rid);
+    if (!json_helper.GetNumber(item, "rid", rid)) {
+        std::string rid_str;
+        if (json_helper.GetString(item, "rid", rid_str)) {
+            rid = std::atoi(rid_str.c_str());
+        }
+    }
     json_helper.GetString(item, "pic", pic);
-    json_helper.GetString(item, "vid", vid);
+    // if (!json_helper.GetString(item, "vid", vid)) {
+    //     json_helper.GetString(item, "mv_id", vid);
+    // }
     json_helper.GetString(item, "name", name);
     json_helper.GetString(item, "artist", artist);
     json_helper.GetString(item, "album", album);

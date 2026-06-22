@@ -27,23 +27,8 @@ bool CenguiguiResource::Search(const QueryBase& query, std::vector<Music*>& musi
 }
 
 void CenguiguiResource::ParseLyricsFromJson(const std::string& json, Lyrics& lyrics) {
-    auto json_obj = cJSON_Parse(json.c_str());
-    if (!json_obj) {
-        ESP_LOGE(TAG, "Failed to parse JSON");
-        return;
-    }
-    cJSON* data = cJSON_GetObjectItem(json_obj, "data");
-    if (data && cJSON_IsObject(data)) {
-        cJSON* lrclist = cJSON_GetObjectItem(data, "lrclist");
-        if (lrclist && cJSON_IsString(lrclist)) {
-            lyrics.Parse(lrclist->valuestring);
-        }
-    } else {
-        lyrics.Clear();
-    }
-    cJSON_Delete(json_obj);
+    MusicResource::ParseLyricsFromJson(json, {"data", "lrclist"}, lyrics);
 }
-void CenguiguiResource::ParseMusicFromJson(cJSON* item, Music& music) { music.FromJson(item); }
 
 std::string CenguiguiResource::GetUrl(Music& music) { return music.url; }
 std::string CenguiguiResource::GetLyricsUrl(Music& music) { return music.lrc; }

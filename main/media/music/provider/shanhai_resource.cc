@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <format>
 #include "cJSON.h"
+#include "media/common/json_helper.h"
 #include "media/common/restful_client.h"
 #include "media/common/string_helper.h"
 
@@ -31,23 +32,8 @@ bool ShanhaiResource::Search(const QueryBase& query, std::vector<Music*>& music_
 }
 
 void ShanhaiResource::ParseLyricsFromJson(const std::string& json, Lyrics& lyrics) {
-    auto json_obj = cJSON_Parse(json.c_str());
-    if (!json_obj) {
-        ESP_LOGE(TAG, "Failed to parse JSON");
-        return;
-    }
-    cJSON* data = cJSON_GetObjectItem(json_obj, "data");
-    if (data && cJSON_IsObject(data)) {
-        cJSON* lrclist = cJSON_GetObjectItem(data, "lrclist");
-        if (lrclist && cJSON_IsString(lrclist)) {
-            lyrics.Parse(lrclist->valuestring);
-        }
-    } else {
-        lyrics.Clear();
-    }
-    cJSON_Delete(json_obj);
+    MusicResource::ParseLyricsFromJson(json, {"data", "lyric_text"}, lyrics);
 }
-void ShanhaiResource::ParseMusicFromJson(cJSON* item, Music& music) { music.FromJson(item); }
 
 std::string ShanhaiResource::GetUrl(Music& music) {
     if (music.url.empty()) {
@@ -60,13 +46,10 @@ std::string ShanhaiResource::GetUrl(Music& music) {
         if (!response.empty()) {
             auto json = cJSON_Parse(response.c_str());
             if (json) {
-                cJSON* code = cJSON_GetObjectItem(json, "code");
-                cJSON* data = cJSON_GetObjectItem(json, "data");
-                if (code && cJSON_IsNumber(code) && code->valueint == 200 && data &&
-                    cJSON_IsObject(data)) {
-                    cJSON* url_item = cJSON_GetObjectItem(data, "url");
-                    if (url_item && cJSON_IsString(url_item))
-                        music.url = url_item->valuestring;
+                JsonHelper json_helper;
+                auto url_item = json_helper.GetObject(json, {"data", "url"});
+                if (url_item && cJSON_IsString(url_item)) {
+                    music.url = cJSON_GetStringValue(url_item);
                 }
                 cJSON_Delete(json);
             }

@@ -14,8 +14,8 @@ public:
     bool Search(const std::string& url, std::vector<Music*>& music_list);
     virtual std::string GetUrl(Music& music) = 0;
     virtual std::string GetLyricsUrl(Music& music) = 0;
-    virtual void ParseMusicFromJson(cJSON* item, Music& music) = 0;
     virtual void ParseLyricsFromJson(const std::string& json, Lyrics& lyrics) = 0;
+    void ParseLyricsFromJson(const std::string& json, const std::vector<const char*>& keys, Lyrics& lyrics);
     static std::unique_ptr<MusicResource> NewMusicResource();
 
 private:

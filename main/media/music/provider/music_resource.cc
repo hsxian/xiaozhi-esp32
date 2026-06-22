@@ -2,6 +2,7 @@
 #include "cJSON.h"
 #include "media/common/restful_client.h"
 #include "media/common/string_helper.h"
+#include "media/common/json_helper.h"
 #include "esp_log.h"
 
 #ifdef CONFIG_ENABLE_CENGUIGUI_RESOURCE
@@ -53,3 +54,20 @@ std::unique_ptr<MusicResource> MusicResource::NewMusicResource() {
     cJSON_Delete(json);
     return success;
  }
+
+ void MusicResource::ParseLyricsFromJson(const std::string& json, const std::vector<const char*>& keys,
+                                      Lyrics& lyrics) {
+    auto json_obj = cJSON_Parse(json.c_str());
+    if (!json_obj) {
+        ESP_LOGE(TAG, "Failed to parse JSON");
+        return;
+    }
+    JsonHelper json_helper;
+    auto lrc_item = json_helper.GetObject(json_obj, keys);
+    if (lrc_item && cJSON_IsString(lrc_item)) {
+        lyrics.Parse(cJSON_GetStringValue(lrc_item));
+    } else {
+        lyrics.Clear();
+    }
+    cJSON_Delete(json_obj);
+}

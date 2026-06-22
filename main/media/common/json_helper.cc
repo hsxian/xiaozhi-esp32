@@ -26,3 +26,12 @@ bool JsonHelper::GetNumber(const cJSON* item, const char* key, int& value) {
     }
     return false;
 };
+
+const cJSON* JsonHelper::GetObject(const cJSON* item, const std::vector<const char*>& keys) {
+    const cJSON* current = item;
+    for (const auto& key : keys) {
+        if (!current) return nullptr;
+        current = cJSON_GetObjectItem(current, key);
+    }
+    return current;
+};

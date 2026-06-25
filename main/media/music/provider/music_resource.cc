@@ -13,6 +13,10 @@
 #include "shanhai_resource.h"
 #endif
 
+#ifdef CONFIG_ENABLE_FENGYE_RESOURCE
+#include "fengye_resource.h"
+#endif
+
 #define TAG "MusicResource"
 
 std::unique_ptr<MusicResource> MusicResource::NewMusicResource() {
@@ -20,18 +24,40 @@ std::unique_ptr<MusicResource> MusicResource::NewMusicResource() {
         return std::make_unique<CenguiguiResource>();
     #elif defined(CONFIG_ENABLE_SHANHAI_RESOURCE)
         return std::make_unique<ShanhaiResource>();
+    #elif defined(CONFIG_ENABLE_FENGYE_RESOURCE)
+        return std::make_unique<FengyeResource>();
     #else
         #error "Please enable at least one music resource"
     #endif
  }
 
- bool MusicResource::Search(const std::string& url, std::vector<Music*>& music_list) {
-     RestfulClient restful_client;
-     bool success = false;
-     std::string response = restful_client.Get(url);
-     if (response.empty()) {
-         return success;
-     }
+ void MusicResource::ParseJsonArray(const cJSON* array, std::vector<Music*>& music_list) {
+    MusicHelper music_helper;
+    music_helper.FromJsonArray(const_cast<cJSON*>(array), music_list);
+}
+
+bool MusicResource::ParseResponse(const cJSON* json, std::vector<Music*>& music_list) {
+    cJSON* code = cJSON_GetObjectItem(json, "code");
+    if (code && cJSON_IsNumber(code) && code->valueint == 200) {
+        cJSON* data = cJSON_GetObjectItem(json, "data");
+        ParseJsonArray(data, music_list);
+        return music_list.size() > 0;
+    }
+    ESP_LOGE(TAG, "Failed to parse JSON, code: %d", code ? code->valueint : -1);
+    return false;
+}
+
+bool MusicResource::Search(const std::string& url, std::vector<Music*>& music_list) {
+    return Search(url, {}, music_list);
+}
+
+bool MusicResource::Search(const std::string& url, const std::map<std::string, std::string>& headers, std::vector<Music*>& music_list) {
+    RestfulClient restful_client;
+    bool success = false;
+    std::string response = restful_client.Get(url, headers);
+    if (response.empty()) {
+        return success;
+    }
     StringHelper string_helper;
     response = string_helper.ReplaceStringAll(response, "http://", "https://");
 
@@ -41,19 +67,10 @@ std::unique_ptr<MusicResource> MusicResource::NewMusicResource() {
         return success;
     }
 
-    cJSON* code = cJSON_GetObjectItem(json, "code");
-    if (code && cJSON_IsNumber(code) && code->valueint == 200) {
-        cJSON* data = cJSON_GetObjectItem(json, "data");
-
-        MusicHelper music_helper;
-        music_helper.FromJsonArray(data, music_list);
-        success = music_list.size() > 0;
-    } else {
-        ESP_LOGE(TAG, "Failed to parse JSON, code: %d", code->valueint);
-    }
+    success = this->ParseResponse(json, music_list);
     cJSON_Delete(json);
     return success;
- }
+}
 
  void MusicResource::ParseLyricsFromJson(const std::string& json, const std::vector<const char*>& keys,
                                       Lyrics& lyrics) {

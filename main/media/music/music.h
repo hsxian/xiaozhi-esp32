@@ -8,7 +8,7 @@ struct cJSON;
 struct Music {
 private:
 public:
-    int rid;             // 音乐ID
+    std::string rid;             // 音乐ID
     std::string pic;     // 封面图片URL
     std::string vid;     // 视频ID
     std::string name;    // 音乐名称

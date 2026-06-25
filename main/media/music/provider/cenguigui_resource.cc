@@ -18,6 +18,8 @@ _Static_assert(sizeof(CONFIG_CENGUIGUI_RESOURCE_ADDRESS) > 1,
 #endif
 
 bool CenguiguiResource::Search(const QueryBase& query, std::vector<Music*>& music_list) {
+    RestfulClient restful_client;
+    
     std::string keyword = restful_client.UrlEncode(query.keyword);
     auto url = std::format("{}?name={}&page={}&limit={}", CONFIG_CENGUIGUI_RESOURCE_ADDRESS,
                            keyword, query.page, query.page_size);

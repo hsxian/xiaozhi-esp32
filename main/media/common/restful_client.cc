@@ -69,7 +69,7 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
     }
     return ESP_OK;
 }
-esp_http_client_handle_t RestfulClient::CreateClient(const char* url, UserDataContext& dc) {
+esp_http_client_handle_t RestfulClient::CreateClient(const char* url, UserDataContext& dc, const std::map<std::string, std::string>& headers) {
     esp_http_client_config_t config = {
         .url = url,  // 可换成你的 API URL
         // .tls_version = ESP_HTTP_CLIENT_TLS_VER_TLS_1_2,
@@ -91,6 +91,9 @@ esp_http_client_handle_t RestfulClient::CreateClient(const char* url, UserDataCo
     // esp_http_client_set_header(client, "Accept-Encoding", "gzip, deflate");
     esp_http_client_set_header(client, "Cache-Control", "no-cache");
     esp_http_client_set_header(client, "DNT", "1");
+    for (const auto& header : headers) {
+        esp_http_client_set_header(client, header.first.c_str(), header.second.c_str());
+    }
     return client;
 }
 
@@ -127,10 +130,14 @@ esp_err_t RestfulClient::PerformLoop(esp_http_client_handle_t client, UserDataCo
     return err;
 }
 std::string RestfulClient::Get(const std::string& url) {
+    return Get(url, {});
+}
+
+std::string RestfulClient::Get(const std::string& url, const std::map<std::string, std::string>& headers) {
     auto url_str = url.c_str();
     std::string response;
     UserDataContext dc = {&response, UserDataType::Data};
-    esp_http_client_handle_t client = CreateClient(url_str, dc);
+    esp_http_client_handle_t client = CreateClient(url_str, dc, headers);
 
     ESP_LOGI(TAG, "HTTP GET request => %s", url_str);
     // GET 请求
@@ -144,13 +151,18 @@ std::string RestfulClient::Get(const std::string& url) {
 
 std::string RestfulClient::Post(const std::string& url, const std::string& body,
                                 const std::string& content_type) {
+    return Post(url, body, {{"Content-Type", content_type}});
+}
+
+std::string RestfulClient::Post(const std::string& url, const std::string& body,
+                                const std::map<std::string, std::string>& headers) {
     auto url_str = url.c_str();
     std::string response;
     UserDataContext dc = {&response, UserDataType::Data};
-    esp_http_client_handle_t client = CreateClient(url_str, dc);
+    esp_http_client_handle_t client = CreateClient(url_str, dc, headers);
 
     ESP_LOGI(TAG, "HTTP POST request => %s", url_str);
-    // POST 请求
+    esp_http_client_set_post_field(client, body.c_str(), body.length());
     PerformLoop(client, dc, "HTTP POST");
 
     esp_http_client_close(client);

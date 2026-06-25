@@ -1082,6 +1082,11 @@ menu "Personal Development Configuration"
                         bool "shanghai"
                         help
                             Enable shanghai music resource.
+
+                    config ENABLE_FENGYE_RESOURCE
+                        bool "fengye"
+                        help
+                            Enable fengye music resource.
                 endchoice
 
                 if ENABLE_CENGUIGUI_RESOURCE
@@ -1103,6 +1108,19 @@ menu "Personal Development Configuration"
                         default ""
                         help
                             shanghai music API key
+                endif
+
+                if ENABLE_FENGYE_RESOURCE
+                    config FENGYE_RESOURCE_ADDRESS
+                        string "fengye Music Address"
+                        default ""
+                        help
+                            fengye music address, format: http://IP:PORT/
+                    config FENGYE_RESOURCE_REFERER
+                        string "fengye Music Referer"
+                        default ""
+                        help
+                            fengye music Referer
                 endif
             endif
         endmenu

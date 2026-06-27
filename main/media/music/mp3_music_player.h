@@ -56,6 +56,7 @@ private:
     // 清理资源
     void CleanupResources();
     bool OnWakeWordDetected(void* data);
+    bool OnToggleChatEvent(void* data);
 
     void UpdateTimeInfo(int codec_output_rate, int output_samples, int output_channels,
                         const MP3FrameInfo& frame_info);
@@ -91,6 +92,7 @@ private:
     std::atomic<int> current_track_index_{0};
     std::string current_url_;
     int wake_word_listener_id_{-1};
+    int toggle_chat_listener_id_{-1};
     int state_machine_listener_id_{-1};
 
     SemaphoreHandle_t pause_ack_semaphore_{nullptr};

@@ -126,6 +126,7 @@ public:
     void AppendEventToGroup(EventBits_t event_bits);
     void ClearEventFromGroup(EventBits_t event_bits);
     EventListener& BeforeHandleWakeWordEventListener() { return before_handle_wake_word_event_listener_; }
+    EventListener& BeforeHandleToggleChatEventListener() { return before_handle_toggle_chat_listener_; }
 
 
 private:
@@ -153,6 +154,7 @@ private:
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
     EventListener before_handle_wake_word_event_listener_;
+    EventListener before_handle_toggle_chat_listener_;
 
 
     // Event handlers

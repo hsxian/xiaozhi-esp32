@@ -99,6 +99,7 @@ private:
     void RaiseAlarmRinging(const Alarm& alarm);
     void StopAlarmRinging(const Alarm& alarm);
     bool OnWakeWordDetected(void* data);
+    bool OnToggleChatEvent(void* data);
     void RingingTask(void* data);
     void StopRingingTask();
 
@@ -113,4 +114,5 @@ private:
     // 闹钟响起之前的系统音量
     int original_volume_;
     Display* display_;
+    int toggle_chat_listener_id_{-1};
 };

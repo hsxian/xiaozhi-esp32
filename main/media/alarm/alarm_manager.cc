@@ -33,6 +33,9 @@ AlarmManager::AlarmManager()
     : timer_handle_(nullptr), is_ringing_(false), display_(Board::GetInstance().GetDisplay()) {
     Application::GetInstance().BeforeHandleWakeWordEventListener().AddEventListener(
         [this](void* data) { return this->OnWakeWordDetected(data); });
+    toggle_chat_listener_id_ =
+        Application::GetInstance().BeforeHandleToggleChatEventListener().AddEventListener(
+            [this](void* data) { return this->OnWakeWordDetected(data); });
 }
 
 AlarmManager::~AlarmManager() {
@@ -45,6 +48,8 @@ AlarmManager::~AlarmManager() {
     }
     alarms_.clear();
     current_ringing_alarm_ = nullptr;
+    Application::GetInstance().BeforeHandleToggleChatEventListener().RemoveEventListener(
+        toggle_chat_listener_id_);
 }
 
 void AlarmManager::Initialize() {

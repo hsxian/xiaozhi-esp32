@@ -39,6 +39,9 @@ Mp3MusicPlayer::Mp3MusicPlayer()
                     this->ChangePlayControlMode(PlayControlMode::kPause);
                 }
             });
+    toggle_chat_listener_id_ =
+        Application::GetInstance().BeforeHandleToggleChatEventListener().AddEventListener(
+            [this](void* data) { return this->OnWakeWordDetected(data); });
 }
 
 Mp3MusicPlayer::~Mp3MusicPlayer() {
@@ -50,6 +53,8 @@ Mp3MusicPlayer::~Mp3MusicPlayer() {
         wake_word_listener_id_);
     Application::GetInstance().GetStateMachine().RemoveStateChangeListener(
         state_machine_listener_id_);
+    Application::GetInstance().BeforeHandleToggleChatEventListener().RemoveEventListener(
+        toggle_chat_listener_id_);
     CleanupResources();
     delete lyrics_;
     lyrics_ = nullptr;

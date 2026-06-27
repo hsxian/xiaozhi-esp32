@@ -705,6 +705,13 @@ void Application::StopListening() {
 }
 
 void Application::HandleToggleChatEvent() {
+    auto listeners = before_handle_toggle_chat_listener_.GetListeners();
+    for (auto& listener : listeners) {
+        if (listener && listener(nullptr)) {
+            return;
+        }
+    }
+
     auto state = GetDeviceState();
 
     if (state == kDeviceStateActivating) {

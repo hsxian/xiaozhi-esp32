@@ -29,7 +29,10 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         "a tool to control music playback can pause, resume, stop, next track, previous track. You "
         "must provide the control mode to use. The control "
         "mode can be one of the following values: 2 for pause, 3 for resume, 4 for stop, 5 for "
-        "next track, 6 for previous track.",
+        "next track, 6 for previous track. "
+        "IMPORTANT: Only one command is needed at a time. For example, calling 5 (next track) "
+        "will automatically resume playback, so do NOT call 3 (resume) right after 5. "
+        "Similarly, calling 6 (previous track) will also auto-play.",
         PropertyList({Property("controlMode", kPropertyTypeInteger,
                                (int)MusicPlayer::PlayControlMode::kPause,
                                (int)MusicPlayer::PlayControlMode::kPause,

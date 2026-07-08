@@ -14,6 +14,7 @@ class MusicResource {
 public:
     virtual ~MusicResource() = default;
     virtual bool Search(const QueryBase& query, std::vector<Music*>& music_list) = 0;
+    virtual bool GetFavoriteSongs(const int& count, std::vector<Music*>& music_list) = 0;
     bool Search(const std::string& url, std::vector<Music*>& music_list);
     bool Search(const std::string& url, const std::map<std::string, std::string>& headers, std::vector<Music*>& music_list);
     virtual std::string GetUrl(Music& music) = 0;

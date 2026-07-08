@@ -99,6 +99,31 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         });
     tools.push_back(tool);
 
+    // 获取收藏音乐
+    tool = new McpTool(
+        "self.music.favorite",
+        "a tool to get favorite songs from the music resource. "
+        "You can specify the number of favorite songs to retrieve, "
+        "and it will store the songs in the playlist, then return count of the favorite songs.",
+        PropertyList({Property("count", kPropertyTypeInteger, 100)}),
+        [this](const PropertyList& properties) -> ReturnValue {
+            auto count = properties["count"].value<int>();
+            auto resource = MusicResource::NewMusicResource();
+            std::vector<Music*> ms;
+            resource->GetFavoriteSongs(count, ms);
+            if (ms.empty()) {
+                return "No favorite songs found";
+            }
+            MusicHelper music_helper;
+            std::vector<Music*> added_musics;
+            std::vector<Music*> failed_musics;
+
+            music_helper.TryAdd(music_list_, ms, added_musics, failed_musics);
+            music_helper.Release(failed_musics);
+            return std::format("Favorite songs count: %d", added_musics.size());
+        });
+    tools.push_back(tool);
+
     // 播放歌单中的音乐
     tool = new McpTool(
         "self.music.play",

@@ -122,6 +122,7 @@ void HttpStream::OpenTask(void* arg) {
                                        .timeout_ms = 10000,
                                        .max_redirection_count = 5,
                                        .event_handler = http_event_handler,
+                                       .buffer_size = 2048,
                                        .user_data = stream,
                                        .crt_bundle_attach = esp_crt_bundle_attach};
 

@@ -1087,6 +1087,11 @@ menu "Personal Development Configuration"
                         bool "fengye"
                         help
                             Enable fengye music resource.
+
+                    config ENABLE_LUOYUE_RESOURCE
+                        bool "luoyue"
+                        help
+                            Enable luoyue music resource.
                 endchoice
 
                 if ENABLE_CENGUIGUI_RESOURCE
@@ -1122,6 +1127,20 @@ menu "Personal Development Configuration"
                         help
                             fengye music Referer
                 endif
+
+                if ENABLE_LUOYUE_RESOURCE
+                    config LUOYUE_RESOURCE_ADDRESS
+                        string "luoyue Music Address"
+                        default ""
+                        help
+                            luoyue music address, format: http://IP:PORT/
+                    config QQ_MUSIC_PLAYLIST_ID
+                        string "QQ Music Playlist ID"
+                        default ""
+                        help
+                            QQ Music playlist ID.
+                endif
+                
             endif
         endmenu
 

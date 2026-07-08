@@ -76,6 +76,7 @@ esp_http_client_handle_t RestfulClient::CreateClient(const char* url, UserDataCo
         .timeout_ms = MAX_HTTP_TIMEOUT_MS,
         .max_redirection_count = 5,  // 最大重定向次数
         .event_handler = _http_event_handler,
+        .buffer_size = 2048,
         .user_data = &dc,
         // .use_global_ca_store = true,                 // 使用全局CA存储
         // .skip_cert_common_name_check = true,         // 跳过CN检查

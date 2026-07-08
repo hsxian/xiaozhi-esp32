@@ -267,6 +267,10 @@ void Mp3MusicPlayer::DecodePlayLoop(Music& music) {
 
     auto mr = MusicResource::NewMusicResource();
     auto url = mr->GetUrl(music);
+    if (url.empty()) {
+        ESP_LOGW(TAG, "Failed to get music URL");
+        return;
+    }
     http_stream_->Open(url);
 
     display_->SetChatMessage("music", ("Playing: " + music.ToString()).c_str());

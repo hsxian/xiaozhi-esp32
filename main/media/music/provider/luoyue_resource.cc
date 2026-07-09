@@ -27,23 +27,13 @@ void LuoyueResource::ParseJsonArray(const cJSON* array, std::vector<Music*>& mus
         int value = 0;
         json_helper.GetNumber(item, "id", value);
         music->rid = std::to_string(value);
+        json_helper.GetString(item, "mid", music->vid);
         json_helper.GetString(item, "song", music->name);
         json_helper.GetString(item, "singer", music->artist);
         json_helper.GetString(item, "album", music->album);
 
         music_list.push_back(music);
     }
-}
-
-bool LuoyueResource::ParseResponse(const cJSON* json, std::vector<Music*>& music_list) {
-    JsonHelper json_helper;
-    auto list = json_helper.GetObject(json, {"data", "list"});
-    if (!list || !cJSON_IsArray(list)) {
-        ESP_LOGE(TAG, "Response not contain a JSON array");
-        return false;
-    }
-    ParseJsonArray(list, music_list);
-    return music_list.size() > 0;
 }
 
 bool LuoyueResource::Search(const QueryBase& query, std::vector<Music*>& music_list) {
@@ -54,9 +44,9 @@ bool LuoyueResource::Search(const QueryBase& query, std::vector<Music*>& music_l
     auto url = std::format("{}/v2/music/tencent/search/song?word={}&page={}&num={}",
                            CONFIG_LUOYUE_RESOURCE_ADDRESS, keyword, query.page, query.page_size);
 
-    ESP_LOGI(TAG, "url: %s, keyword: %s", url.c_str(), keyword.c_str());
+    ESP_LOGI(TAG, "url: %s, keyword: %s", url.c_str(), query.keyword.c_str());
 
-    return MusicResource::Search(url, music_list);
+    return MusicResource::Search(url, {}, {"data"}, music_list);
 }
 
 bool LuoyueResource::GetFavoriteSongs(const int& count, std::vector<Music*>& music_list) {
@@ -72,7 +62,7 @@ bool LuoyueResource::GetFavoriteSongs(const int& count, std::vector<Music*>& mus
                         CONFIG_LUOYUE_RESOURCE_ADDRESS, CONFIG_QQ_MUSIC_PLAYLIST_ID, page, num);
 
         std::vector<Music*> page_list;
-        if (MusicResource::Search(url, page_list)) {
+        if (MusicResource::Search(url, {}, {"data", "list"}, page_list)) {
             music_list.insert(music_list.end(), page_list.begin(), page_list.end());
             success = true;
         } else {
@@ -95,49 +85,10 @@ std::string LuoyueResource::GetUrl(Music& music) {
         RestfulClient restful_client;
         // 先获取歌曲信息（包含音质列表）
 
-        auto url = std::format("{}/music/tencent/song/info?id={}", CONFIG_LUOYUE_RESOURCE_ADDRESS,
-                               music.rid);
+        auto url = std::format("{}/music/tencent/song/link?mid={}&quality=8", CONFIG_LUOYUE_RESOURCE_ADDRESS, music.vid);
 
         ESP_LOGI(TAG, "url: %s", url.c_str());
-
-        std::string response = restful_client.Get(url);
-        if (response.empty()) {
-            return "";
-        }
-        auto json = cJSON_Parse(response.c_str());
-        if (!json) {
-            ESP_LOGE(TAG, "Failed to parse JSON");
-            return "";
-        }
-        JsonHelper json_helper;
-        auto qualityInfo = json_helper.GetObject(json, {"data", "qualityInfo"});
-
-        // 从qualityInfo中找出最大type的mp3文件
-        int max_type = -1;
-        if (qualityInfo && cJSON_IsArray(qualityInfo)) {
-            cJSON* item = nullptr;
-            cJSON_ArrayForEach(item, qualityInfo) {
-                int type = 0;
-                std::string file;
-                json_helper.GetNumber(item, "type", type);
-                json_helper.GetString(item, "file", file);
-                if (file.size() >= 4 && file.compare(file.size() - 4, 4, ".mp3") == 0) {
-                    if (type > max_type) {
-                        max_type = type;
-                    }
-                }
-            }
-        }
-        if (max_type < 0) {
-            max_type = 6;  // 默认音质
-        }
-
-        cJSON_Delete(json);
-
-        url = std::format("{}/music/tencent/song/link?id={}&quality={}",
-                          CONFIG_LUOYUE_RESOURCE_ADDRESS, music.rid, max_type);
-
-        response = restful_client.Get(url);
+        auto response = restful_client.Get(url);
         if (!response.empty()) {
             auto json = cJSON_Parse(response.c_str());
             if (json) {

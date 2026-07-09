@@ -22,13 +22,17 @@ bool ShanhaiResource::Search(const QueryBase& query, std::vector<Music*>& music_
     RestfulClient restful_client;
     
     std::string keyword = restful_client.UrlEncode(query.keyword);
-    auto url = std::format("{}?action=search&keyword={}&page={}&size={}&key={}",
+    auto url = std::format("{}/?action=search&keyword={}&page={}&size={}&key={}",
                            CONFIG_SHANHAI_RESOURCE_ADDRESS, keyword, query.page, query.page_size,
                            CONFIG_SHANHAI_RESOURCE_API_KEY);
 
     ESP_LOGI(TAG, "url: %s, keyword: %s", url.c_str(), query.keyword.c_str());
 
     return MusicResource::Search(url, music_list);
+}
+
+bool ShanhaiResource::GetFavoriteSongs(const int& count, std::vector<Music*>& music_list) {
+    return false;
 }
 
 void ShanhaiResource::ParseLyricsFromJson(const std::string& json, Lyrics& lyrics) {
@@ -38,7 +42,7 @@ void ShanhaiResource::ParseLyricsFromJson(const std::string& json, Lyrics& lyric
 std::string ShanhaiResource::GetUrl(Music& music) {
     if (music.url.empty()) {
         auto url =
-            std::format("{}?action=music_url&music_id={}&key={}", CONFIG_SHANHAI_RESOURCE_ADDRESS,
+            std::format("{}/?action=music_url&music_id={}&key={}", CONFIG_SHANHAI_RESOURCE_ADDRESS,
                         music.rid, CONFIG_SHANHAI_RESOURCE_API_KEY);
 
         RestfulClient restful_client;
@@ -60,7 +64,7 @@ std::string ShanhaiResource::GetUrl(Music& music) {
 std::string ShanhaiResource::GetLyricsUrl(Music& music) {
     if (music.lrc.empty()) {
         music.lrc =
-            std::format("{}?action=lyric&music_id={}&key={}", CONFIG_SHANHAI_RESOURCE_ADDRESS,
+            std::format("{}/?action=lyric&music_id={}&key={}", CONFIG_SHANHAI_RESOURCE_ADDRESS,
                         music.rid, CONFIG_SHANHAI_RESOURCE_API_KEY);
     }
     return music.lrc;

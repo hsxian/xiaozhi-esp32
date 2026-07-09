@@ -1099,7 +1099,7 @@ menu "Personal Development Configuration"
                         string "cenguiui Music Address"
                         default ""
                         help
-                            cenguiui music address, format: http://IP:PORT/
+                            cenguiui music address, format: http://IP:PORT
                 endif
 
                 if ENABLE_SHANHAI_RESOURCE
@@ -1107,7 +1107,7 @@ menu "Personal Development Configuration"
                         string "shanghai Music Address"
                         default ""
                         help
-                            shanghai music address, format: http://IP:PORT/
+                            shanghai music address, format: http://IP:PORT
                     config SHANHAI_RESOURCE_API_KEY
                         string "shanghai Music API Key"
                         default ""
@@ -1120,7 +1120,7 @@ menu "Personal Development Configuration"
                         string "fengye Music Address"
                         default ""
                         help
-                            fengye music address, format: http://IP:PORT/
+                            fengye music address, format: http://IP:PORT
                     config FENGYE_RESOURCE_REFERER
                         string "fengye Music Referer"
                         default ""
@@ -1133,7 +1133,7 @@ menu "Personal Development Configuration"
                         string "luoyue Music Address"
                         default ""
                         help
-                            luoyue music address, format: http://IP:PORT/
+                            luoyue music address, format: http://IP:PORT
                     config QQ_MUSIC_PLAYLIST_ID
                         string "QQ Music Playlist ID"
                         default ""

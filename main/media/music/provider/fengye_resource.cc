@@ -32,26 +32,21 @@ void FengyeResource::ParseJsonArray(const cJSON* array, std::vector<Music*>& mus
     }
 }
 
-bool FengyeResource::ParseResponse(const cJSON* json, std::vector<Music*>& music_list) {
-    if (!cJSON_IsArray(json)) {
-        ESP_LOGE(TAG, "Response is not a JSON array");
-        return false;
-    }
-    ParseJsonArray(json, music_list);
-    return music_list.size() > 0;
-}
-
 bool FengyeResource::Search(const QueryBase& query, std::vector<Music*>& music_list) {
     RestfulClient restful_client;
 
     std::string keyword = restful_client.UrlEncode(query.keyword);
-    auto url = std::format("{}netease/search/song/?keywords={}&pn={}&limit={}", CONFIG_FENGYE_RESOURCE_ADDRESS,
+    auto url = std::format("{}/netease/search/song/?keywords={}&pn={}&limit={}", CONFIG_FENGYE_RESOURCE_ADDRESS,
                            keyword, query.page, query.page_size);
     ESP_LOGI(TAG, "url: %s, keyword: %s", url.c_str(), query.keyword.c_str());
 
     std::map<std::string, std::string> headers;
     headers["Referer"] = CONFIG_FENGYE_RESOURCE_REFERER;
-    return MusicResource::Search(url, headers, music_list);
+    return MusicResource::Search(url, headers, {}, music_list);
+}
+
+bool FengyeResource::GetFavoriteSongs(const int& count, std::vector<Music*>& music_list) {
+    return false;
 }
 
 void FengyeResource::ParseLyricsFromJson(const std::string& json, Lyrics& lyrics) {

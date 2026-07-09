@@ -1,9 +1,9 @@
 #include "music_resource.h"
 #include "cJSON.h"
+#include "esp_log.h"
+#include "media/common/json_helper.h"
 #include "media/common/restful_client.h"
 #include "media/common/string_helper.h"
-#include "media/common/json_helper.h"
-#include "esp_log.h"
 
 #ifdef CONFIG_ENABLE_CENGUIGUI_RESOURCE
 #include "cenguigui_resource.h"
@@ -24,40 +24,37 @@
 #define TAG "MusicResource"
 
 std::unique_ptr<MusicResource> MusicResource::NewMusicResource() {
-    #ifdef CONFIG_ENABLE_CENGUIGUI_RESOURCE
-        return std::make_unique<CenguiguiResource>();
-    #elif defined(CONFIG_ENABLE_SHANHAI_RESOURCE)
-        return std::make_unique<ShanhaiResource>();
-    #elif defined(CONFIG_ENABLE_FENGYE_RESOURCE)
-        return std::make_unique<FengyeResource>();
-    #elif defined(CONFIG_ENABLE_LUOYUE_RESOURCE)
-        return std::make_unique<LuoyueResource>();
-    #else
-        #error "Please enable at least one music resource"
-    #endif
- }
-
- void MusicResource::ParseJsonArray(const cJSON* array, std::vector<Music*>& music_list) {
-    MusicHelper music_helper;
-    music_helper.FromJsonArray(const_cast<cJSON*>(array), music_list);
+#ifdef CONFIG_ENABLE_CENGUIGUI_RESOURCE
+    return std::make_unique<CenguiguiResource>();
+#elif defined(CONFIG_ENABLE_SHANHAI_RESOURCE)
+    return std::make_unique<ShanhaiResource>();
+#elif defined(CONFIG_ENABLE_FENGYE_RESOURCE)
+    return std::make_unique<FengyeResource>();
+#elif defined(CONFIG_ENABLE_LUOYUE_RESOURCE)
+    return std::make_unique<LuoyueResource>();
+#else
+#error "Please enable at least one music resource"
+#endif
 }
 
-bool MusicResource::ParseResponse(const cJSON* json, std::vector<Music*>& music_list) {
-    cJSON* code = cJSON_GetObjectItem(json, "code");
-    if (code && cJSON_IsNumber(code) && code->valueint == 200) {
-        cJSON* data = cJSON_GetObjectItem(json, "data");
-        ParseJsonArray(data, music_list);
-        return music_list.size() > 0;
-    }
-    ESP_LOGE(TAG, "Failed to parse JSON, code: %d", code ? code->valueint : -1);
-    return false;
+void MusicResource::ParseJsonArray(const cJSON* array, std::vector<Music*>& music_list) {
+    MusicHelper music_helper;
+    music_helper.FromJsonArray(const_cast<cJSON*>(array), music_list);
 }
 
 bool MusicResource::Search(const std::string& url, std::vector<Music*>& music_list) {
     return Search(url, {}, music_list);
 }
 
-bool MusicResource::Search(const std::string& url, const std::map<std::string, std::string>& headers, std::vector<Music*>& music_list) {
+bool MusicResource::Search(const std::string& url,
+                           const std::map<std::string, std::string>& headers,
+                           std::vector<Music*>& music_list) {
+    return Search(url, headers, {"data"}, music_list);
+}
+bool MusicResource::Search(const std::string& url,
+                           const std::map<std::string, std::string>& headers,
+                           const std::vector<const char*>& keysOfMusicJsonArray,
+                           std::vector<Music*>& music_list) {
     RestfulClient restful_client;
     bool success = false;
     std::string response = restful_client.Get(url, headers);
@@ -73,13 +70,21 @@ bool MusicResource::Search(const std::string& url, const std::map<std::string, s
         return success;
     }
 
-    success = this->ParseResponse(json, music_list);
+    JsonHelper json_helper;
+    auto list = json_helper.GetObject(json, keysOfMusicJsonArray);
+    if (!list || !cJSON_IsArray(list)) {
+        ESP_LOGE(TAG, "Response not contain a JSON array");
+        return success;
+    }
+    ParseJsonArray(list, music_list);
+
+    success = music_list.size() > 0;
     cJSON_Delete(json);
     return success;
 }
 
- void MusicResource::ParseLyricsFromJson(const std::string& json, const std::vector<const char*>& keys,
-                                      Lyrics& lyrics) {
+void MusicResource::ParseLyricsFromJson(const std::string& json,
+                                        const std::vector<const char*>& keys, Lyrics& lyrics) {
     auto json_obj = cJSON_Parse(json.c_str());
     if (!json_obj) {
         ESP_LOGE(TAG, "Failed to parse JSON");

@@ -11,8 +11,18 @@ enum class RepeatMode : uint8_t {
     DAILY,     // 每天
     WORKDAYS,  // 工作日
     HOLIDAYS,  // 节假日
-    CUSTOM     // 自定义重复日期
+    CUSTOM     // 自定义重复日期（通过repeat_days位掩码指定）
 };
+
+// repeat_days 预定义常量（bit 0=周日, bit 1=周一, ..., bit 6=周六）
+inline constexpr uint8_t REPEAT_DAYS_NONE     = 0b0000000;  // 不重复
+inline constexpr uint8_t REPEAT_DAYS_WORKDAYS = 0b0111110;  // 周一~周五
+inline constexpr uint8_t REPEAT_DAYS_WEEKENDS = 0b1000001;  // 周六~周日
+inline constexpr uint8_t REPEAT_DAYS_EVERYDAY = 0b1111111;  // 每天
+
+// repeat_days 字符串与位掩码互转（格式: "0,1,2,3,4,5,6"，0=周日 ... 6=周六）
+std::string RepeatDaysToString(uint8_t repeat_days);
+uint8_t StringToRepeatDays(const std::string& str);
 
 // 闹钟状态枚举
 enum class AlarmState : uint8_t {

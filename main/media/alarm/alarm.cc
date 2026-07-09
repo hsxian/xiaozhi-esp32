@@ -2,8 +2,38 @@
 #include <esp_log.h>
 #include <cJSON.h>
 #include <format>
+#include <sstream>
+#include <cstring>
 
 #define TAG "Alarm"
+
+// repeat_days 位掩码 → 字符串 "0,1,2,3,4,5,6"
+std::string RepeatDaysToString(uint8_t repeat_days) {
+    if (repeat_days == 0) return "";
+    std::string result;
+    for (int i = 0; i < 7; i++) {
+        if (repeat_days & (1 << i)) {
+            if (!result.empty()) result += ",";
+            result += std::to_string(i);
+        }
+    }
+    return result;
+}
+
+// 字符串 "0,1,2,3,4,5,6" → repeat_days 位掩码
+uint8_t StringToRepeatDays(const std::string& str) {
+    if (str.empty()) return 0;
+    uint8_t result = 0;
+    std::stringstream ss(str);
+    std::string token;
+    while (std::getline(ss, token, ',')) {
+        int day = std::stoi(token);
+        if (day >= 0 && day <= 6) {
+            result |= (1 << day);
+        }
+    }
+    return result;
+}
 
 // 默认构造函数
 Alarm::Alarm()
@@ -53,7 +83,7 @@ void Alarm::ToJson(cJSON* root) const {
     cJSON_AddNumberToObject(root, "second", second);
     cJSON_AddNumberToObject(root, "volume", volume);
     cJSON_AddNumberToObject(root, "repeat", (int)repeat_mode);
-    cJSON_AddNumberToObject(root, "repeat_days", repeat_days);
+    cJSON_AddStringToObject(root, "repeat_days", RepeatDaysToString(repeat_days).c_str());
     cJSON_AddNumberToObject(root, "state", (int)state);
     cJSON_AddNumberToObject(root, "snooze_duration", snooze_duration);
     cJSON_AddNumberToObject(root, "snooze_count", snooze_count);
@@ -80,7 +110,14 @@ bool Alarm::FromJson(const std::string& json) {
     second = cJSON_GetNumberValue(cJSON_GetObjectItem(root, "second"));
     volume = cJSON_GetNumberValue(cJSON_GetObjectItem(root, "volume"));
     repeat_mode = (RepeatMode)cJSON_GetNumberValue(cJSON_GetObjectItem(root, "repeat"));
-    repeat_days = cJSON_GetNumberValue(cJSON_GetObjectItem(root, "repeat_days"));
+    cJSON* repeatDaysJson = cJSON_GetObjectItem(root, "repeat_days");
+    if (cJSON_IsString(repeatDaysJson)) {
+        repeat_days = StringToRepeatDays(cJSON_GetStringValue(repeatDaysJson));
+    } else if (cJSON_IsNumber(repeatDaysJson)) {
+        repeat_days = (uint8_t)cJSON_GetNumberValue(repeatDaysJson);
+    } else {
+        repeat_days = 0;
+    }
     state = (AlarmState)cJSON_GetNumberValue(cJSON_GetObjectItem(root, "state"));
     snooze_duration = cJSON_GetNumberValue(cJSON_GetObjectItem(root, "snooze_duration"));
     snooze_count = cJSON_GetNumberValue(cJSON_GetObjectItem(root, "snooze_count"));
@@ -128,9 +165,13 @@ std::string Alarm::ToString() const {
     
     std::string week = "";
     if (repeat_mode == RepeatMode::CUSTOM) {
-        if (repeat_days == 127) {
+        if (repeat_days == REPEAT_DAYS_EVERYDAY) {
             week = "(Every day)";
-        } else if (repeat_days == 0) {
+        } else if (repeat_days == REPEAT_DAYS_WORKDAYS) {
+            week = "(Workdays)";
+        } else if (repeat_days == REPEAT_DAYS_WEEKENDS) {
+            week = "(Weekends)";
+        } else if (repeat_days == REPEAT_DAYS_NONE) {
             week = "(repeat days value error)";
         } else {
             static const char* week_names[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};

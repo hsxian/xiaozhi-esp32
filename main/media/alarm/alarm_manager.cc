@@ -79,7 +79,7 @@ void PropertyListToAlarm(const PropertyList& properties, Alarm& alarm) {
     alarm.second = properties["second"].value<int>();
     alarm.volume = properties["volume"].value<int>();
     alarm.repeat_mode = (RepeatMode)properties["repeat_mode"].value<int>();
-    alarm.repeat_days = properties["repeat_days"].value<int>();
+    alarm.repeat_days = StringToRepeatDays(properties["repeat_days"].value<std::string>());
 }
 
 
@@ -101,7 +101,7 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                                 Property("second", kPropertyTypeInteger, 0, 59),
                                 Property("volume", kPropertyTypeInteger, 90, 0, 100),
                                 Property("repeat_mode", kPropertyTypeInteger, 0, 4),
-                                Property("repeat_days", kPropertyTypeInteger, 0, 127)});
+                                Property("repeat_days", kPropertyTypeString, "1,2,3,4,5")});
 
     auto tool = new McpTool(
         "self.alarm_clock.add",
@@ -109,12 +109,15 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         "flexibility. It utilizes an Alarm struct that operates on absolute time, requiring any "
         "relative time settings to be converted into a specific hour, minute, and second format. "
         "Each alarm is uniquely identified by an ID and includes a customizable name and a volume "
-        "level ranging from 0 to 100. The scheduling logic is handled by the RepeatMode enum, "
-        "which supports single occurrences (ONCE), daily repeats (DAILY), workday-only schedules "
-        "(WORKDAYS), holidays (HOLIDAYS), or fully customized patterns (CUSTOM). For custom "
-        "setups, the repeat_days integer acts as a bitmask covering "
-        "Sunday(1)、Monday(2)、Tuesday(4)、Wednesday(8)、Thursday(16)、Friday(32) and  Saturday(64),"
-        " allowing users to select specific days of the week for the alarm to trigger.",
+        "level ranging from 0 to 100. The scheduling logic is handled by the RepeatMode enum: "
+        "ONCE=0 (single occurrence), DAILY=1 (every day), "
+        "WORKDAYS=2 (smart workdays, considers holiday adjustments), "
+        "HOLIDAYS=3 (holidays only), CUSTOM=4 (custom day selection via repeat_days). "
+        "The repeat_days field is only used when repeat_mode=CUSTOM. "
+        "It is a comma-separated string of day numbers: "
+        "0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday. "
+        "Examples: '1,2,3,4,5' for workdays, '0,6' for weekends, '1,3,5' for Mon/Wed/Fri. "
+        "Leave empty string for no repeat.",
         property_list,
         [this](const PropertyList& properties) -> ReturnValue {
             ESP_LOGI(TAG, "Add alarm");
@@ -547,8 +550,6 @@ bool AlarmManager::ShouldRingAtDate(const time_t& now, const Alarm& alarm) const
     auto ret = false;
     switch (alarm.repeat_mode) {
         case RepeatMode::ONCE: {
-            // 检查是否是设置闹钟的当天（简化处理）
-            // 实际应该存储闹钟设置的日期
             ret = true;
             break;
         }

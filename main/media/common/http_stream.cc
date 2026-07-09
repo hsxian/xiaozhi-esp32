@@ -122,9 +122,11 @@ void HttpStream::OpenTask(void* arg) {
                                        .timeout_ms = 10000,
                                        .max_redirection_count = 5,
                                        .event_handler = http_event_handler,
-                                       .buffer_size = 2048,
+                                       .buffer_size = 4096,
+                                       .buffer_size_tx = 4096,
                                        .user_data = stream,
-                                       .crt_bundle_attach = esp_crt_bundle_attach};
+                                       .crt_bundle_attach = esp_crt_bundle_attach,
+                                    };
 
     stream->client_ = esp_http_client_init(&config);
     ESP_LOGI(TAG, "OpenTask, client=%p", stream->client_);

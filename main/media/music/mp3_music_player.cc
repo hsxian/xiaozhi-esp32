@@ -21,6 +21,13 @@ extern "C" {
 
 #define TAG "Mp3MusicPlayer"
 
+// Peek 队列检查缓冲区是否有足够空间容纳下一个 chunk
+static bool CanFitNextChunk(RingBuffer& buffer, QueueHandle_t queue) {
+    DataChunk chunk;
+    if (xQueuePeek(queue, &chunk, 0) != pdPASS) return false;
+    return (buffer.capacity() - buffer.size()) >= chunk.size;
+}
+
 Mp3MusicPlayer::Mp3MusicPlayer()
     : audio_codec_(Board::GetInstance().GetAudioCodec()),
       display_(Board::GetInstance().GetDisplay()),
@@ -140,8 +147,7 @@ void Mp3MusicPlayer::PlayMusicTask(void* arg) {
 }
 
 // 处理接收到的MP3数据块
-bool Mp3MusicPlayer::ProcessReceivedChunk(DataChunk& chunk, std::vector<uint8_t>& mp3_buffer,
-                                          size_t& mp3_data_offset, size_t& mp3_data_size,
+bool Mp3MusicPlayer::ProcessReceivedChunk(DataChunk& chunk, RingBuffer& mp3_buffer,
                                           bool& track_complete, bool& track_error,
                                           const char* log_tag) {
     // 检查状态
@@ -156,23 +162,9 @@ bool Mp3MusicPlayer::ProcessReceivedChunk(DataChunk& chunk, std::vector<uint8_t>
         return false;
     }
 
-    // 将数据添加到缓冲区。若数据已消费，需要先压缩剩余数据到缓冲区前端。
-    if (mp3_data_offset > 0) {
-        if (mp3_data_size > 0) {
-            memmove(mp3_buffer.data(), mp3_buffer.data() + mp3_data_offset, mp3_data_size);
-        }
-        mp3_data_offset = 0;
-    }
-
-    if (mp3_data_size + chunk.size > mp3_buffer.size()) {
-        mp3_buffer.resize(mp3_data_size + chunk.size + BUFFER_SIZE);
-    }
-    memcpy(mp3_buffer.data() + mp3_data_size, chunk.data, chunk.size);
-    mp3_data_size += chunk.size;
+    // 写入环形缓冲区（write内部会自动compact）
+    mp3_buffer.write(chunk.data, chunk.size);
     delete[] chunk.data;
-
-    // ESP_LOGD(TAG, "%s %d bytes, total buffered: %u", log_tag, (int)chunk.size,
-    //          (unsigned int)mp3_data_size);
 
     return true;
 }
@@ -292,10 +284,8 @@ void Mp3MusicPlayer::DecodePlayLoop(Music& music) {
         return;
     }
 
-    std::vector<uint8_t> mp3_buffer(BUFFER_SIZE * 2);
+    RingBuffer mp3_buffer;
     std::vector<int16_t> pcm_buffer(PCM_BUFFER_SIZE / 2);
-    size_t mp3_data_offset = 0;
-    size_t mp3_data_size = 0;
     int consecutive_skip_count = 0;
     bool track_complete = false;
     bool track_error = false;
@@ -338,15 +328,27 @@ void Mp3MusicPlayer::DecodePlayLoop(Music& music) {
             http_stream_->Open(url, http_stream_->GetDownloadBytesReceived());
         }
 
-        // 从队列获取数据 - 缓冲区充足时用长超时批处理，不足时用短超时防止DMA饥饿
+        // 从队列获取数据 - 先peek检查chunk大小，确保缓冲区有足够空间才取，避免截断丢数据
         DataChunk chunk;
-        // 仅在真正危急(mp3_data_size < 512)时用短超时，避免频繁轮询导致AFE任务饿死
-        TickType_t recv_timeout = (mp3_data_size < 512) ? pdMS_TO_TICKS(60) : pdMS_TO_TICKS(500);
+        bool should_fetch;
+        TickType_t recv_timeout;
+
+        if (CanFitNextChunk(mp3_buffer, mp3_queue)) {
+            should_fetch = true;
+            recv_timeout = pdMS_TO_TICKS(0);
+        } else if (uxQueueMessagesWaiting(mp3_queue) > 0) {
+            // 队列有数据但装不下，等消费者消化
+            should_fetch = false;
+            recv_timeout = pdMS_TO_TICKS(0);
+        } else {
+            // 队列为空，根据缓冲区紧急程度决定等待超时
+            should_fetch = true;
+            recv_timeout = (mp3_buffer.size() < 512) ? pdMS_TO_TICKS(60) : pdMS_TO_TICKS(500);
+        }
         BaseType_t recv_result = xQueueReceive(mp3_queue, &chunk, recv_timeout);
         if (recv_result == pdPASS) {
             was_outputting_silence_ = false;  // 收到新数据，退出静音状态
-            if (!ProcessReceivedChunk(chunk, mp3_buffer, mp3_data_offset, mp3_data_size,
-                                      track_complete, track_error, "Received")) {
+            if (!ProcessReceivedChunk(chunk, mp3_buffer, track_complete, track_error, "Received")) {
                 break;
             }
         } else {
@@ -362,7 +364,7 @@ void Mp3MusicPlayer::DecodePlayLoop(Music& music) {
             // 保持AudioPowerCheck活跃，即使队列为空也定期更新
             audio_service.UpdateLastOutputTime();
             // 缓冲区数据不足时输出静音（带淡出过渡）防止 DMA 饥饿导致炸音
-            if (mp3_data_size < 512) {
+            if (mp3_buffer.size() < 512) {
                 // 输出80ms静音，在60ms超时周期内持续填充DMA防止下溢
                 int silence_samples = audio_codec_->output_sample_rate() *
                                       audio_codec_->output_channels() * 80 / 1000;
@@ -401,19 +403,20 @@ void Mp3MusicPlayer::DecodePlayLoop(Music& music) {
         }
 
         // 解码播放循环：持续解码直到缓冲区数据不足
-        while (mp3_data_size >= 512 && play_state_ == PlayState::kPlaying) {
-            if (!DecodeAndPlayFrame(decoder, mp3_buffer, mp3_data_offset, mp3_data_size, pcm_buffer,
+        while (mp3_buffer.size() >= 512 && play_state_ == PlayState::kPlaying) {
+            if (!DecodeAndPlayFrame(decoder, mp3_buffer, pcm_buffer,
                                     consecutive_skip_count)) {
                 ESP_LOGW(TAG, "Decode failed, skipping");
                 track_error = true;  // 设置错误标志，使外层循环退出并切换到下一首
                 break;
             }
 
-            // 解码过程中尝试预取下一批数据，提高效率
+            // 解码过程中尝试预取下一批数据，空间够才取
             DataChunk next_chunk;
-            if (xQueueReceive(mp3_queue, &next_chunk, 0) == pdPASS) {
-                if (!ProcessReceivedChunk(next_chunk, mp3_buffer, mp3_data_offset, mp3_data_size,
-                                          track_complete, track_error, "Prefetched")) {
+            if (CanFitNextChunk(mp3_buffer, mp3_queue)) {
+                xQueueReceive(mp3_queue, &next_chunk, 0);
+                if (!ProcessReceivedChunk(next_chunk, mp3_buffer,
+                                        track_complete, track_error, "Prefetched")) {
                     break;
                 }
             }
@@ -443,9 +446,8 @@ void Mp3MusicPlayer::DecodePlayLoop(Music& music) {
     http_stream_->CleanDataQueue();
 }
 
-void Mp3MusicPlayer::SkipId3Tag(std::vector<uint8_t>& mp3_buffer, size_t& mp3_data_size,
-                                size_t& mp3_data_offset) {
-    if (mp3_data_size < 10 || mp3_buffer[0] != 'I' || mp3_buffer[1] != 'D' ||
+void Mp3MusicPlayer::SkipId3Tag(RingBuffer& mp3_buffer) {
+    if (mp3_buffer.size() < 10 || mp3_buffer[0] != 'I' || mp3_buffer[1] != 'D' ||
         mp3_buffer[2] != '3') {
         return;
     }
@@ -456,17 +458,14 @@ void Mp3MusicPlayer::SkipId3Tag(std::vector<uint8_t>& mp3_buffer, size_t& mp3_da
     tag_size += 10;
     ESP_LOGI(TAG, "Found ID3v2 tag, skipping %u bytes", tag_size);
 
-    if (tag_size < mp3_data_size) {
-        mp3_data_size -= tag_size;
-        memmove(mp3_buffer.data(), mp3_buffer.data() + tag_size, mp3_data_size);
-        mp3_data_offset = 0;
+    if (tag_size < mp3_buffer.size()) {
+        mp3_buffer.skip_front(tag_size);
         ESP_LOGI(TAG, "After ID3 skip, first 8 bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
                  mp3_buffer[0], mp3_buffer[1], mp3_buffer[2], mp3_buffer[3], mp3_buffer[4],
                  mp3_buffer[5], mp3_buffer[6], mp3_buffer[7]);
     } else {
         ESP_LOGW(TAG, "ID3 tag larger than buffer, discarding buffer");
-        mp3_data_offset = 0;
-        mp3_data_size = 0;
+        mp3_buffer.clear();
     }
 }
 
@@ -570,26 +569,23 @@ void Mp3MusicPlayer::ConvertPcmIfNeeded(const MP3FrameInfo& frame_info,
     }
 }
 
-bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t>& mp3_buffer,
-                                        size_t& mp3_data_offset, size_t& mp3_data_size,
+bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, RingBuffer& mp3_buffer,
                                         std::vector<int16_t>& pcm_buffer,
                                         int& consecutive_skip_count) {
     // 在每次从头开始解码时跳过ID3标签
-    if (mp3_data_offset == 0) {
-        SkipId3Tag(mp3_buffer, mp3_data_size, mp3_data_offset);
+    if (mp3_buffer.head() == 0) {
+        SkipId3Tag(mp3_buffer);
     }
 
     // 搜索有效帧头 - 每次失败后都重新搜索，避免卡在无效位置
-    int sync_offset = MP3FindSyncWord(mp3_buffer.data() + mp3_data_offset, (int)mp3_data_size);
+    int sync_offset = MP3FindSyncWord(mp3_buffer.read_ptr(), (int)mp3_buffer.size());
     if (sync_offset > 0) {
-        mp3_data_offset += (size_t)sync_offset;
-        mp3_data_size -= (size_t)sync_offset;
+        mp3_buffer.consume((size_t)sync_offset);
         ESP_LOGI(TAG, "Found valid MP3 frame at offset %d, remaining: %u", sync_offset,
-                 (unsigned int)mp3_data_size);
-    } else if (sync_offset < 0 && mp3_data_size > 0) {
+                 (unsigned int)mp3_buffer.size());
+    } else if (sync_offset < 0 && mp3_buffer.size() > 0) {
         // 没有找到帧头，跳过一个字节
-        mp3_data_offset++;
-        mp3_data_size--;
+        mp3_buffer.consume(1);
         consecutive_skip_count++;
         if (consecutive_skip_count % 50 == 0) {
             ESP_LOGW(TAG, "No valid frame found, skipping bytes (total skipped: %d)",
@@ -598,20 +594,20 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t
         if (consecutive_skip_count >= MAX_CONSECUTIVE_SKIPS) {
             ESP_LOGE(TAG,
                      "Too many consecutive frame skips (%d), stopping playback of this track. "
-                     "Buffer: offset=%u size=%u",
-                     consecutive_skip_count, (unsigned int)mp3_data_offset,
-                     (unsigned int)mp3_data_size);
+                     "Buffer: head=%u size=%u",
+                     consecutive_skip_count, (unsigned int)mp3_buffer.head(),
+                     (unsigned int)mp3_buffer.size());
             // 打印缓冲区最后32字节帮助调试
-            if (mp3_data_size > 0) {
+            if (mp3_buffer.size() > 0) {
                 ESP_LOGE(TAG, "Buffer tail: %02X %02X %02X %02X %02X %02X %02X %02X",
-                         mp3_buffer[mp3_data_offset + mp3_data_size - 8],
-                         mp3_buffer[mp3_data_offset + mp3_data_size - 7],
-                         mp3_buffer[mp3_data_offset + mp3_data_size - 6],
-                         mp3_buffer[mp3_data_offset + mp3_data_size - 5],
-                         mp3_buffer[mp3_data_offset + mp3_data_size - 4],
-                         mp3_buffer[mp3_data_offset + mp3_data_size - 3],
-                         mp3_buffer[mp3_data_offset + mp3_data_size - 2],
-                         mp3_buffer[mp3_data_offset + mp3_data_size - 1]);
+                         mp3_buffer[mp3_buffer.size() - 8],
+                         mp3_buffer[mp3_buffer.size() - 7],
+                         mp3_buffer[mp3_buffer.size() - 6],
+                         mp3_buffer[mp3_buffer.size() - 5],
+                         mp3_buffer[mp3_buffer.size() - 4],
+                         mp3_buffer[mp3_buffer.size() - 3],
+                         mp3_buffer[mp3_buffer.size() - 2],
+                         mp3_buffer[mp3_buffer.size() - 1]);
             }
             return false;
         }
@@ -620,20 +616,20 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t
 
     // MP3帧最小约为24字节（帧头4字节 + 最小数据），要求至少有128字节确保有完整帧
     const int MIN_FRAME_SIZE = 128;
-    if (mp3_data_size < MIN_FRAME_SIZE) {
+    if (mp3_buffer.size() < MIN_FRAME_SIZE) {
         // ESP_LOGD(TAG, "Not enough data to decode (size: %u, need: %d), waiting for more",
-        //          (unsigned int)mp3_data_size, MIN_FRAME_SIZE);
+        //          (unsigned int)mp3_buffer.size(), MIN_FRAME_SIZE);
         return true;
     }
 
-    unsigned char* pInData = const_cast<unsigned char*>(mp3_buffer.data() + mp3_data_offset);
-    int nBytesLeft = mp3_data_size;
+    unsigned char* pInData = const_cast<unsigned char*>(mp3_buffer.read_ptr());
+    int nBytesLeft = mp3_buffer.size();
     int samples_decoded = MP3Decode(decoder, &pInData, &nBytesLeft, pcm_buffer.data(), 0);
 
     if (samples_decoded < 0) {
         if (samples_decoded == ERR_MP3_INDATA_UNDERFLOW) {
             // ESP_LOGD(TAG, "Need more data for MP3 decoding, current buffered: %u",
-            //          (unsigned int)mp3_data_size);
+            //          (unsigned int)mp3_buffer.size());
             consecutive_skip_count = 0;
             return true;
         }
@@ -651,9 +647,8 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t
         }
 
         // 解码失败，跳过一个字节并重新搜索
-        if (mp3_data_size > 0) {
-            mp3_data_offset++;
-            mp3_data_size--;
+        if (mp3_buffer.size() > 0) {
+            mp3_buffer.consume(1);
         }
         consecutive_skip_count++;
 
@@ -674,11 +669,10 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(HMP3Decoder decoder, std::vector<uint8_t
 
     MP3FrameInfo frame_info;
     MP3GetLastFrameInfo(decoder, &frame_info);
-    int bytes_consumed = mp3_data_size - nBytesLeft;
-    mp3_data_offset += bytes_consumed;
-    mp3_data_size = nBytesLeft;
+    int bytes_consumed = mp3_buffer.size() - nBytesLeft;
+    mp3_buffer.consume(bytes_consumed);
     // ESP_LOGD(TAG, "Decoded %d samples, consumed %d bytes, remaining: %u", frame_info.outputSamps,
-    //          bytes_consumed, (unsigned int)mp3_data_size);
+    //          bytes_consumed, (unsigned int)mp3_buffer.size());
 
     if (frame_info.outputSamps <= 0) {
         return true;

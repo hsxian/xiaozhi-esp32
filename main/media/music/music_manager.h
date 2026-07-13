@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include "music.h"
 
@@ -24,5 +25,5 @@ private :
 
     std::vector<Music*> music_list_;
 
-    MusicPlayer* music_player_ = nullptr;
+    std::unique_ptr<MusicPlayer> music_player_;
 };

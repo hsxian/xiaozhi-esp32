@@ -10,7 +10,7 @@
 #include "display.h"
 #include "mcp_server.h"
 #include "media/common/restful_client.h"
-#include "mp3_music_player.h"
+#include "player/music_player.h"
 #include "provider/music_resource.h"
 
 #define TAG "MusicManager"
@@ -139,7 +139,7 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                 return "Music is already playing, please use self.music.control to resume it";
             }
             if (music_player_ == nullptr) {
-                music_player_ = new Mp3MusicPlayer();
+                music_player_ = MusicPlayer::NewMusicPlayer();
             }
 
             auto loop_mode =
@@ -268,9 +268,5 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
 }
 
 void MusicManager::TryResleaseMusicPlayer() {
-    if (!music_player_) {
-        return;
-    }
-    delete music_player_;
-    music_player_ = nullptr;
+    music_player_.reset();
 }

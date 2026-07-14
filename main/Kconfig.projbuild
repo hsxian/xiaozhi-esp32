@@ -1093,6 +1093,11 @@ menu "Personal Development Configuration"
                         bool "luoyue"
                         help
                             Enable luoyue music resource.
+
+                    config ENABLE_QQ_MUSIC_RESOURCE
+                        bool "qq music"
+                        help
+                            Enable QQ music resource.
                 endchoice
 
                 choice
@@ -1155,6 +1160,24 @@ menu "Personal Development Configuration"
                         default ""
                         help
                             QQ Music playlist ID.
+                endif
+
+                if ENABLE_QQ_MUSIC_RESOURCE
+                    config QQ_MUSIC_RESOURCE_ADDRESS
+                        string "QQ Music Address"
+                        default ""
+                        help
+                            QQ music address, format: http://IP:PORT
+                    config QQ_MUSIC_COOKIE
+                        string "QQ Music Cookie"
+                        default ""
+                        help
+                            QQ music cookie for authentication.
+                    config QQ_MUSIC_FAVORITE_ID
+                        string "QQ Music Favorite Playlist ID"
+                        default ""
+                        help
+                            QQ Music favorite playlist ID.
                 endif
                 
             endif

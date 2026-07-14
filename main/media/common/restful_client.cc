@@ -77,7 +77,7 @@ esp_http_client_handle_t RestfulClient::CreateClient(const char* url, UserDataCo
         .max_redirection_count = 5,  // 最大重定向次数
         .event_handler = _http_event_handler,
         .buffer_size = 4096,
-        .buffer_size_tx = 4096,
+        // .buffer_size_tx = 4096,
         .user_data = &dc,
         // .use_global_ca_store = true,                 // 使用全局CA存储
         // .skip_cert_common_name_check = true,         // 跳过CN检查
@@ -164,6 +164,7 @@ std::string RestfulClient::Post(const std::string& url, const std::string& body,
     esp_http_client_handle_t client = CreateClient(url_str, dc, headers);
 
     ESP_LOGI(TAG, "HTTP POST request => %s", url_str);
+    esp_http_client_set_method(client, HTTP_METHOD_POST);
     esp_http_client_set_post_field(client, body.c_str(), body.length());
     PerformLoop(client, dc, "HTTP POST");
 

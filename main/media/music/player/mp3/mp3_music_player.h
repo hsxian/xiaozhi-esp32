@@ -22,10 +22,10 @@ private:
     void UpdateTimeInfo(int codec_output_rate, int output_samples, int output_channels,
                         const MP3FrameInfo& frame_info);
 
-    HMP3Decoder decoder_{nullptr};
-    std::vector<int16_t> pcm_buffer_{PCM_BUFFER_SIZE / 2};
-    int consecutive_skip_count_{0};
-
-    static constexpr int MAX_CONSECUTIVE_SKIPS = 100;
     static constexpr int PCM_BUFFER_SIZE = 8 * 1024;
+    static constexpr int MAX_CONSECUTIVE_SKIPS = 100;
+
+    HMP3Decoder decoder_{nullptr};
+    std::vector<int16_t> pcm_buffer_;
+    int consecutive_skip_count_{0};
 };

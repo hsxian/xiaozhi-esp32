@@ -21,6 +21,10 @@
 #include "luoyue_resource.h"
 #endif
 
+#ifdef CONFIG_ENABLE_QQ_MUSIC_RESOURCE
+#include "qqmusic_resource.h"
+#endif
+
 #define TAG "MusicResource"
 
 std::unique_ptr<MusicResource> MusicResource::NewMusicResource() {
@@ -32,6 +36,8 @@ std::unique_ptr<MusicResource> MusicResource::NewMusicResource() {
     return std::make_unique<FengyeResource>();
 #elif defined(CONFIG_ENABLE_LUOYUE_RESOURCE)
     return std::make_unique<LuoyueResource>();
+#elif defined(CONFIG_ENABLE_QQ_MUSIC_RESOURCE)
+    return std::make_unique<QQMusicResource>();
 #else
 #error "Please enable at least one music resource"
 #endif

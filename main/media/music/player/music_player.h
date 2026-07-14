@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include "../music.h"
+#include "esp_audio_types.h"
 
 class AudioCodec;
 class Display;
@@ -59,6 +60,9 @@ public:
     int32_t total_duration_ms() const { return total_duration_ms_; }
     bool IsPlaying() const { return play_state_ != PlayState::kIdle; }
     PlayState GetPlayState() const { return play_state_; }
+
+    // 从原始数据流检测音频类型（支持 MP3 / AAC(ADTS) / M4A / FLAC）
+    static esp_audio_type_t DetectAudioType(const uint8_t* data, size_t size);
 
 protected:
     void ResetPlaybackProgress();

@@ -20,7 +20,7 @@ extern "C" {
 
 #define TAG "Mp3MusicPlayer"
 
-Mp3MusicPlayer::Mp3MusicPlayer() = default;
+Mp3MusicPlayer::Mp3MusicPlayer() : pcm_buffer_(PCM_BUFFER_SIZE / 2) {}
 Mp3MusicPlayer::~Mp3MusicPlayer() {
     CloseDecoder();
 }
@@ -163,17 +163,6 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(RingBuffer& data_buffer) {
                      "Buffer: head=%u size=%u",
                      consecutive_skip_count_, (unsigned int)data_buffer.head(),
                      (unsigned int)data_buffer.size());
-            if (data_buffer.size() > 0) {
-                ESP_LOGE(TAG, "Buffer tail: %02X %02X %02X %02X %02X %02X %02X %02X",
-                         data_buffer[data_buffer.size() - 8],
-                         data_buffer[data_buffer.size() - 7],
-                         data_buffer[data_buffer.size() - 6],
-                         data_buffer[data_buffer.size() - 5],
-                         data_buffer[data_buffer.size() - 4],
-                         data_buffer[data_buffer.size() - 3],
-                         data_buffer[data_buffer.size() - 2],
-                         data_buffer[data_buffer.size() - 1]);
-            }
             return false;
         }
         return true;
@@ -186,7 +175,8 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(RingBuffer& data_buffer) {
 
     unsigned char* pInData = const_cast<unsigned char*>(data_buffer.read_ptr());
     int nBytesLeft = data_buffer.size();
-    int samples_decoded = MP3Decode(decoder_, &pInData, &nBytesLeft, pcm_buffer_.data(), 0);
+    int samples_decoded =
+        MP3Decode(decoder_, &pInData, &nBytesLeft, pcm_buffer_.data(), 0);
 
     if (samples_decoded < 0) {
         if (samples_decoded == ERR_MP3_INDATA_UNDERFLOW) {
@@ -199,7 +189,7 @@ bool Mp3MusicPlayer::DecodeAndPlayFrame(RingBuffer& data_buffer) {
         if (samples_decoded != ERR_MP3_INVALID_FRAMEHEADER) {
             MP3FrameInfo error_fi;
             MP3GetLastFrameInfo(decoder_, &error_fi);
-            if (error_fi.outputSamps > 0 && error_fi.outputSamps <= (int)(PCM_BUFFER_SIZE / 2)) {
+            if (error_fi.outputSamps > 0 && error_fi.nChans > 0 && error_fi.outputSamps <= (int)(PCM_BUFFER_SIZE / 2)) {
                 audio_codec_->OutputData(pcm_buffer_.data(), error_fi.outputSamps);
             }
         }

@@ -11,4 +11,5 @@ public:
     bool GetNumber(const cJSON* item, const char* key, double& value);
     bool GetNumber(const cJSON* item, const char* key, int& value);
     const cJSON* GetObject(const cJSON* item, const std::vector<const char*>& keys);
+    const cJSON* GetArrayItem(const cJSON* item, const std::vector<const char*>& keys,const int index);
 };

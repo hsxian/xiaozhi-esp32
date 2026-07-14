@@ -111,6 +111,9 @@ void HttpStream::StopRequest() {
         vTaskDelete(task_handle_);
         task_handle_ = nullptr;
     }
+    
+    // 清理队列中的所有数据块，释放分配的内存
+    CleanDataQueue();
 }
 
 void HttpStream::OpenTask(void* arg) {

@@ -35,3 +35,11 @@ const cJSON* JsonHelper::GetObject(const cJSON* item, const std::vector<const ch
     }
     return current;
 };
+
+const cJSON* JsonHelper::GetArrayItem(const cJSON* item, const std::vector<const char*>& keys, const int index) {
+    const cJSON* array = GetObject(item, keys);
+    if (array && cJSON_IsArray(array)) {
+        return cJSON_GetArrayItem(array, index);
+    }
+    return nullptr;
+};

@@ -20,6 +20,49 @@
 
 #define TAG "MusicPlayer"
 
+esp_audio_type_t MusicPlayer::DetectAudioType(const uint8_t* data, size_t size) {
+    if (size < 4) return ESP_AUDIO_TYPE_UNSUPPORT;
+
+    // Skip ID3v2 tag
+    if (data[0] == 'I' && data[1] == 'D' && data[2] == '3') {
+        if (size < 10) return ESP_AUDIO_TYPE_UNSUPPORT;
+        uint32_t tag_size = ((uint32_t)(data[6] & 0x7F) << 21) |
+                            ((uint32_t)(data[7] & 0x7F) << 14) |
+                            ((uint32_t)(data[8] & 0x7F) << 7) |
+                            (uint32_t)(data[9] & 0x7F);
+        tag_size += 10;
+        if (tag_size + 4 > size) return ESP_AUDIO_TYPE_UNSUPPORT;
+        data += tag_size;
+        size -= tag_size;
+        if (size < 4) return ESP_AUDIO_TYPE_UNSUPPORT;
+    }
+
+    // FLAC: "fLaC" magic
+    if (data[0] == 'f' && data[1] == 'L' && data[2] == 'a' && data[3] == 'C') {
+        return ESP_AUDIO_TYPE_FLAC;
+    }
+
+    // M4A/MP4 container: "ftyp" at offset 4
+    if (size >= 12 && data[4] == 'f' && data[5] == 't' && data[6] == 'y' && data[7] == 'p') {
+        return ESP_AUDIO_TYPE_AAC;
+    }
+
+    // MP3 / AAC ADTS: sync word 0xFFF
+    if (data[0] == 0xFF && (data[1] & 0xE0) == 0xE0) {
+        uint8_t layer = (data[1] >> 1) & 0x03;
+
+        // AAC ADTS: layer bits == 00
+        if (layer == 0) {
+            return ESP_AUDIO_TYPE_AAC;
+        }
+
+        // MP3: layer bits != 00 (01=Layer3, 10=Layer2, 11=Layer1)
+        return ESP_AUDIO_TYPE_MP3;
+    }
+
+    return ESP_AUDIO_TYPE_UNSUPPORT;
+}
+
 MusicPlayer::MusicPlayer()
     : audio_codec_(Board::GetInstance().GetAudioCodec()),
       display_(Board::GetInstance().GetDisplay()),
@@ -94,7 +137,7 @@ void MusicPlayer::Play(const std::vector<Music*>& music_list, LoopMode mode) {
     current_track_index_ = 0;
     loop_mode_ = mode;
 
-    xTaskCreate(PlayMusicTask, "music_decode_task", 8192, this, 5, &decode_task_handle_);
+    xTaskCreate(PlayMusicTask, "music_decode_task", 8192, this, 2, &decode_task_handle_);
 
     ESP_LOGI(TAG, "Started playing %d tracks, loop mode: %d", current_music_list_.size(), mode);
 }
@@ -110,11 +153,17 @@ bool MusicPlayer::ProcessReceivedChunk(DataChunk& chunk, RingBuffer& buffer,
                                         const char* log_tag) {
     if (chunk.status == DataStatus::kEos) {
         ESP_LOGI(TAG, "%s EOS signal", log_tag);
+        if (chunk.data) {
+            delete[] chunk.data;
+        }
         track_complete = true;
         return false;
     }
     if (chunk.status == DataStatus::kError) {
         ESP_LOGE(TAG, "%s error signal", log_tag);
+        if (chunk.data) {
+            delete[] chunk.data;
+        }
         track_error = true;
         return false;
     }
@@ -164,6 +213,9 @@ void MusicPlayer::DecodePlayLoop(Music& music) {
     track_error_ = false;
     size_t min_decode_size = GetMinDecodeSize();
 
+    // 输入数据环形缓冲区 - 声明在循环外，保持数据持久性
+    RingBuffer data_buffer;
+
     ESP_LOGI(TAG, "Decode: Entering main decode loop");
     while (play_state_ != PlayState::kIdle && !track_complete_ && !track_error_) {
         if (BreakDecodePlayLoop()) {
@@ -176,11 +228,11 @@ void MusicPlayer::DecodePlayLoop(Music& music) {
         }
         HandleResumeState(url);
 
+        // 定期让出任务以允许其他任务（如WiFi）执行，防止watchdog超时
+        vTaskDelay(1);
+
         DataChunk chunk;
         TickType_t recv_timeout;
-
-            // 输入数据环形缓冲区
-        RingBuffer data_buffer;
 
         if (CanFitNextChunk(data_buffer, data_queue)) {
             recv_timeout = pdMS_TO_TICKS(0);
@@ -217,6 +269,9 @@ void MusicPlayer::DecodePlayLoop(Music& music) {
                 track_error_ = true;
                 break;
             }
+
+            // 在长时间解码后让出任务以允许其他任务运行
+            vTaskDelay(1);
 
             DataChunk next_chunk;
             if (CanFitNextChunk(data_buffer, data_queue)) {

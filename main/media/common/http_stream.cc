@@ -71,7 +71,7 @@ esp_err_t HttpStream::http_event_handler(esp_http_client_event_t* evt) {
         case HTTP_EVENT_ON_HEADER:
             if (strcmp(evt->header_key, "Content-Length") == 0) {
                 stream->content_length_ = atoll(evt->header_value);
-                ESP_LOGI(TAG, "Content-Length: %lld", stream->content_length_);
+                ESP_LOGI(TAG, "Content-Length: %ld", (long)stream->content_length_);
             }
             break;
         // case HTTP_EVENT_ON_HEADER:
@@ -105,13 +105,13 @@ bool HttpStream::Open(const std::string& url, size_t resume_offset) {
 void HttpStream::StopRequest() {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    CleanClient();
-
     if (task_handle_ != nullptr) {
         vTaskDelete(task_handle_);
         task_handle_ = nullptr;
     }
-    
+
+    CleanClient();
+
     // 清理队列中的所有数据块，释放分配的内存
     CleanDataQueue();
 }

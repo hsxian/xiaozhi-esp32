@@ -11,6 +11,7 @@
 #include <vector>
 #include "../music.h"
 #include "esp_audio_types.h"
+#include "esp_audio_simple_dec.h"
 
 class AudioCodec;
 class Display;
@@ -62,7 +63,7 @@ public:
     PlayState GetPlayState() const { return play_state_; }
 
     // 从原始数据流检测音频类型（支持 MP3 / AAC(ADTS) / M4A / FLAC）
-    static esp_audio_type_t DetectAudioType(const uint8_t* data, size_t size);
+    static esp_audio_simple_dec_type_t DetectAudioType(const uint8_t* data, size_t size);
 
 protected:
     void ResetPlaybackProgress();
@@ -81,11 +82,19 @@ protected:
     void HandleBufferUnderrun(int silence_duration_ms = 80, int fade_duration_ms = 5);
     void FadeOutAndStop(int fade_duration_ms = 10);
 
-    // 解码器钩子，子类实现
-    virtual bool OpenDecoder() = 0;
-    virtual void CloseDecoder() = 0;
-    virtual bool DecodeAndPlayFrame(RingBuffer& buffer) = 0;
-    virtual size_t GetMinDecodeSize() const { return 512; }
+    // 解码器钩子
+    bool OpenDecoder(esp_audio_simple_dec_type_t type);
+    void CloseDecoder();
+    bool DecodeAndPlayFrame(RingBuffer& buffer);
+
+    // PCM 转换与时间更新
+    void ConvertPcmIfNeeded(int input_rate, int input_channels, int input_samples,
+                            int& output_samples, int& output_channels);
+    void UpdateTimeInfo(int codec_output_rate, int output_samples, int output_channels,
+                        int bitrate);
+
+    // 从 URL 后缀判断解码器类型
+    static esp_audio_simple_dec_type_t DecideDecoderTypeByUrl(const std::string& url);
 
     // 歌词
     void DownloadLyrics(Music& music);
@@ -132,6 +141,11 @@ protected:
     // 解码状态
     bool track_complete_{false};
     bool track_error_{false};
+
+    // 统一解码器
+    esp_audio_simple_dec_handle_t decoder_{nullptr};
+    static constexpr int MAX_CONSECUTIVE_SKIPS = 100;
+    int consecutive_skip_count_{0};
 
     // 预分配的PCM输出缓冲区
     static constexpr int MAX_PCM_OUTPUT_SAMPLES = 8192;

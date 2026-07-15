@@ -1059,16 +1059,6 @@ endif()
 
 if(CONFIG_ENABLE_MUSIC)
 file(GLOB_RECURSE MUSIC_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/media/music/*.cc)
-# Exclude decoder directories first, then add the selected one
-list(FILTER MUSIC_SOURCES EXCLUDE REGEX ".*media/music/player/(mp3|aac)/.*")
-if(CONFIG_ENABLE_MP3_DECODER)
-file(GLOB MP3_DECODER_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/media/music/player/mp3/*.cc)
-list(APPEND MUSIC_SOURCES ${MP3_DECODER_SOURCES})
-endif()
-if(CONFIG_ENABLE_AAC_DECODER)
-file(GLOB AAC_DECODER_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/media/music/player/aac/*.cc)
-list(APPEND MUSIC_SOURCES ${AAC_DECODER_SOURCES})
-endif()
 list(APPEND SOURCES ${MUSIC_SOURCES})
 endif()
 

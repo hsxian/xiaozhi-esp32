@@ -1,5 +1,7 @@
 #pragma once
 
+#ifdef CONFIG_ENABLE_LUOYUE_RESOURCE
+
 #include <string>
 #include <vector>
 #include "../../common/query_base.h"
@@ -17,3 +19,5 @@ public:
     virtual void ParseJsonArray(const cJSON* array, std::vector<Music*>& music_list) override;
 private:
 };
+
+#endif

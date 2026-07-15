@@ -1100,21 +1100,6 @@ menu "Personal Development Configuration"
                             Enable QQ music resource.
                 endchoice
 
-                choice
-                    prompt "Music Decoder"
-                    default ENABLE_MP3_DECODER
-
-                    config ENABLE_MP3_DECODER
-                        bool "MP3 Decoder"
-                        help
-                            Enable MP3 music decoder.
-
-                    config ENABLE_AAC_DECODER
-                        bool "AAC Decoder"
-                        help
-                            Enable AAC music decoder.
-                endchoice
-
                 if ENABLE_CENGUIGUI_RESOURCE
                     config CENGUIGUI_RESOURCE_ADDRESS
                         string "cenguiui Music Address"

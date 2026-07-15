@@ -1,5 +1,7 @@
 #pragma once
 
+#ifdef CONFIG_ENABLE_QQ_MUSIC_RESOURCE
+
 #include <string>
 #include <vector>
 #include "../../common/query_base.h"
@@ -16,3 +18,5 @@ public:
     virtual void ParseLyricsFromJson(const std::string& json, Lyrics& lyrics) override;
     virtual void ParseJsonArray(const cJSON* array, std::vector<Music*>& music_list) override;
 };
+
+#endif

@@ -1,6 +1,7 @@
-#include "shanhai_resource.h"
+#include "sdkconfig.h"
 
 #ifdef CONFIG_ENABLE_SHANHAI_RESOURCE
+#include "shanhai_resource.h"
 
 #include <esp_log.h>
 #include <algorithm>

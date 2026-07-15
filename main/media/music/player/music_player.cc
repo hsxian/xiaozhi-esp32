@@ -4,14 +4,20 @@
 #include "board.h"
 #include "device_state.h"
 #include "display.h"
-#include "esp_audio_dec_default.h"
-#include "esp_audio_simple_dec_default.h"
+// #include "esp_audio_dec_default.h"
+// #include "esp_audio_simple_dec_default.h"
+#include "esp_audio_dec_reg.h"
+#include "esp_mp3_dec.h"
+#include "esp_flac_dec.h"
+#include "esp_aac_dec.h"
+#include "simple_dec/impl/esp_m4a_dec.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "../lyrics.h"
-#include "media/common/http_stream.h"
+#include "../music.h"
 #include "../provider/music_resource.h"
+#include "media/common/http_stream.h"
 #include "media/common/restful_client.h"
 #include "media/common/xiaozhi_helper.h"
 #include "media/common/ring_buffer.h"
@@ -375,6 +381,10 @@ void MusicPlayer::PlayMusicLoop() {
         DecodePlayLoop(*music);
 
         HandleControlSignal();
+
+        if(current_control_mode_ == PlayControlMode::kPause || current_control_mode_ == PlayControlMode::kResume) {
+            break;
+        }
     }
 
     play_state_ = PlayState::kIdle;
@@ -659,8 +669,10 @@ bool MusicPlayer::OpenDecoder(esp_audio_simple_dec_type_t type) {
     // 注册解码器（仅首次调用时执行）
     static bool decoders_registered = false;
     if (!decoders_registered) {
-        esp_audio_dec_register_default();
-        esp_audio_simple_dec_register_default();
+        esp_mp3_dec_register();
+        esp_flac_dec_register();
+        esp_aac_dec_register();
+        esp_m4a_dec_register();
         decoders_registered = true;
     }
 

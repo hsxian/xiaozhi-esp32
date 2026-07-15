@@ -1,6 +1,7 @@
-#include "qqmusic_resource.h"
+#include "sdkconfig.h"
 
 #ifdef CONFIG_ENABLE_QQ_MUSIC_RESOURCE
+#include "qqmusic_resource.h"
 
 #include <esp_log.h>
 #include <algorithm>
@@ -28,8 +29,11 @@ void QQMusicResource::ParseJsonArray(const cJSON* array, std::vector<Music*>& mu
         json_helper.GetNumber(item, "songid", value);
         music->rid = std::to_string(value);
         json_helper.GetString(item, "songmid", music->vid);
+        auto jn = json_helper.GetArrayItem(item, {"singer"}, 0);
+        if (jn) {
+            json_helper.GetString(jn, "name", music->artist);
+        }
         json_helper.GetString(item, "songname", music->name);
-        json_helper.GetString(item, "singer", music->artist);
         json_helper.GetString(item, "albumname", music->album);
 
         music_list.push_back(music);
@@ -96,44 +100,38 @@ bool QQMusicResource::GetFavoriteSongs(const int& count, std::vector<Music*>& mu
 }
 
 void QQMusicResource::ParseLyricsFromJson(const std::string& json, Lyrics& lyrics) {
-    lyrics.Parse(json);
-    // MusicResource::ParseLyricsFromJson(json, {}, lyrics);
+    // lyrics.Parse(json);
+    MusicResource::ParseLyricsFromJson(json, {"song_lyric"}, lyrics);
 }
 
 std::string QQMusicResource::GetUrl(Music& music) {
     if (music.url.empty()) {
-        
+          RestfulClient restful_client;
+
+        auto url = std::format("{}/music_open_api.php?type=json&mid={}", CONFIG_QQ_MUSIC_COOKIE, music.vid);
+        auto response = restful_client.Get(url);
+        if (!response.empty()) {
+            auto json = cJSON_Parse(response.c_str());
+            if (json) {
+                JsonHelper json_helper;
+                std::string url_str;
+                if (json_helper.GetString(json, "song_play_url_hq", url_str)) {
+                    music.url = url_str;
+                }
+                if (url_str.empty() && json_helper.GetString(json, "song_play_url", url_str)) {
+                    music.url = url_str;
+                }
+                cJSON_Delete(json);
+            }
+        }
     }
     return music.url;
 }
 
 std::string QQMusicResource::GetLyricsUrl(Music& music) {
     if (music.lrc.empty()) {
-        RestfulClient restful_client;
-
-        auto url = CONFIG_QQ_MUSIC_COOKIE;
-        std::map<std::string, std::string> headers;
-        headers["X-Requested-With"] = "XMLHttpRequest";
-        headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8";
-        std::string body = std::format("input={}&filter=id&type=qq&page=1", music.vid);
-        auto response = restful_client.Post(url, body, headers);
-        if (!response.empty()) {
-            auto json = cJSON_Parse(response.c_str());
-            if (json) {
-                JsonHelper json_helper;
-                auto array_item = json_helper.GetArrayItem(json, {"data"}, 0);
-                if (array_item) {
-                    std::string url_str;
-                    if (json_helper.GetString(array_item, "url", url_str)) {
-                        music.url = std::format("{}/{}", url, url_str);
-                    }
-                    if (json_helper.GetString(array_item, "lrc", url_str)) {
-                        music.lrc = std::format("{}/{}", url, url_str);
-                    }
-                }
-                cJSON_Delete(json);
-            }
-        }
+        auto url = std::format("{}/music_open_api.php?type=json&mid={}", CONFIG_QQ_MUSIC_COOKIE, music.vid);
+        music.lrc = url;
     }
     return music.lrc;
 }

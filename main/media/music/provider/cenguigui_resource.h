@@ -1,5 +1,7 @@
 #pragma once
 
+#ifdef CONFIG_ENABLE_CENGUIGUI_RESOURCE
+
 #include <string>
 #include <vector>
 #include "../../common/query_base.h"
@@ -17,3 +19,5 @@ public:
     
 private:
 };
+
+#endif

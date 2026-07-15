@@ -1,6 +1,7 @@
-#include "luoyue_resource.h"
+#include "sdkconfig.h"
 
 #ifdef CONFIG_ENABLE_LUOYUE_RESOURCE
+#include "luoyue_resource.h"
 
 #include <esp_log.h>
 #include <algorithm>

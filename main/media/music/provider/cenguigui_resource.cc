@@ -1,6 +1,7 @@
-#include "cenguigui_resource.h"
+#include "sdkconfig.h"
 
 #ifdef CONFIG_ENABLE_CENGUIGUI_RESOURCE
+#include "cenguigui_resource.h"
 
 #include <esp_log.h>
 #include <algorithm>

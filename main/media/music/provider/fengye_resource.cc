@@ -1,6 +1,7 @@
-#include "fengye_resource.h"
+#include "sdkconfig.h"
 
 #ifdef CONFIG_ENABLE_FENGYE_RESOURCE
+#include "fengye_resource.h"
 
 #include <esp_log.h>
 #include <algorithm>

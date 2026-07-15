@@ -9,10 +9,10 @@
 #include <mutex>
 #include <string>
 #include <vector>
-#include "../music.h"
 #include "esp_audio_types.h"
 #include "esp_audio_simple_dec.h"
 
+class Music;
 class AudioCodec;
 class Display;
 class Lyrics;

@@ -9,8 +9,8 @@
 #include <mutex>
 #include <string>
 #include <vector>
-#include "esp_audio_types.h"
 #include "esp_audio_simple_dec.h"
+#include "esp_audio_types.h"
 
 class Music;
 class AudioCodec;
@@ -40,11 +40,11 @@ public:
 
     // 播放器状态
     enum class PlayState : uint8_t {
-        kIdle,     // 空闲
-        kPlaying,  // 播放中
-        kPausing,  // 暂停请求中（等待解码线程确认）
-        kPaused,   // 已暂停（解码线程已确认）
-        kResuming,    // 恢复请求中（等待解码线程确认）
+        kIdle,      // 空闲
+        kPlaying,   // 播放中
+        kPausing,   // 暂停请求中（等待解码线程确认）
+        kPaused,    // 已暂停（解码线程已确认）
+        kResuming,  // 恢复请求中（等待解码线程确认）
     };
 
     MusicPlayer();
@@ -78,14 +78,17 @@ protected:
     void CleanupResources();
 
     bool HandlePauseState();
-    void HandleResumeState(const std::string& url);
+    void HandleResumeState(const std::string& url, RingBuffer& data_buffer);
+    
     void HandleBufferUnderrun(int silence_duration_ms = 80, int fade_duration_ms = 5);
     void FadeOutAndStop(int fade_duration_ms = 10);
+    void OutputAudioWithFadeIn(int output_samples);
 
     // 解码器钩子
     bool OpenDecoder(esp_audio_simple_dec_type_t type);
     void CloseDecoder();
     bool DecodeAndPlayFrame(RingBuffer& buffer);
+    bool HandleFastForward(int samples, const esp_audio_simple_dec_info_t& info);
 
     // PCM 转换与时间更新
     void ConvertPcmIfNeeded(int input_rate, int input_channels, int input_samples,
@@ -93,12 +96,10 @@ protected:
     void UpdateTimeInfo(int codec_output_rate, int output_samples, int output_channels,
                         int bitrate);
 
-    // 从 URL 后缀判断解码器类型
-    static esp_audio_simple_dec_type_t DecideDecoderTypeByUrl(const std::string& url);
-
     // 歌词
     void DownloadLyrics(Music& music);
     void ShowLyrics();
+    void ShuffleArray(std::vector<int>& arr, int size);
 
     // 事件回调
     bool OnWakeWordDetected(void* data);
@@ -144,6 +145,8 @@ protected:
 
     // 统一解码器
     esp_audio_simple_dec_handle_t decoder_{nullptr};
+    esp_audio_simple_dec_type_t decoder_type_{ESP_AUDIO_SIMPLE_DEC_TYPE_NONE};
+    int32_t fast_forward_to_ms_{0};  // M4A 断点续播快进目标时间，0 表示不需要快进
     static constexpr int MAX_CONSECUTIVE_SKIPS = 100;
     int consecutive_skip_count_{0};
 

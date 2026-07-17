@@ -784,7 +784,9 @@ void AlarmManager::StopRingingTask() {
     }
     auto& app = Application::GetInstance();
     auto& audio_service = app.GetAudioService();
-    audio_service.WaitForPlaybackQueueEmpty();
+    while (!audio_service.IsPlaybackIdle()) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
     if (ringing_task_handle_) {
         ringing_task_handle_ = nullptr;
         ESP_LOGI(TAG, "Stopping ringing task");

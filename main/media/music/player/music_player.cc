@@ -35,6 +35,10 @@ inline void ApplyFadeOut(int16_t* buffer, int fade_samples) {
     }
 }
 
+// =============================================================================
+// 静态工具函数
+// =============================================================================
+
 esp_audio_simple_dec_type_t MusicPlayer::DetectAudioType(const uint8_t* data, size_t size) {
     if (size < 4)
         return ESP_AUDIO_SIMPLE_DEC_TYPE_NONE;
@@ -81,6 +85,18 @@ esp_audio_simple_dec_type_t MusicPlayer::DetectAudioType(const uint8_t* data, si
     return ESP_AUDIO_SIMPLE_DEC_TYPE_NONE;
 }
 
+// Peek 队列检查缓冲区是否有足够空间容纳下一个 chunk
+static bool CanFitNextChunk(RingBuffer& buffer, QueueHandle_t queue) {
+    DataChunk chunk;
+    if (xQueuePeek(queue, &chunk, 0) != pdPASS)
+        return false;
+    return (buffer.capacity() - buffer.size()) >= chunk.size;
+}
+
+// =============================================================================
+// 构造 / 析构 / 工厂
+// =============================================================================
+
 MusicPlayer::MusicPlayer()
     : audio_codec_(Board::GetInstance().GetAudioCodec()),
       display_(Board::GetInstance().GetDisplay()),
@@ -126,13 +142,9 @@ MusicPlayer::~MusicPlayer() {
     http_stream_ = nullptr;
 }
 
-void MusicPlayer::ResetPlaybackProgress() {
-    current_position_ms_ = 0;
-    fast_forward_to_ms_ = 0;
-    total_duration_ms_ = 0;
-    decoder_type_ = ESP_AUDIO_SIMPLE_DEC_TYPE_NONE;
-    ESP_LOGD(TAG, "Playback progress reset");
-}
+// =============================================================================
+// 公开 API
+// =============================================================================
 
 bool MusicPlayer::Play(Music* music, LoopMode mode) {
     std::vector<Music*> music_list = {music};
@@ -158,44 +170,200 @@ void MusicPlayer::Play(const std::vector<Music*>& music_list, LoopMode mode) {
     ESP_LOGI(TAG, "Started playing %d tracks, loop mode: %d", current_music_list_.size(), mode);
 }
 
+bool MusicPlayer::ChangePlayControlMode(const PlayControlMode& mode) {
+    if (!CanChangePlayControlMode(mode)) {
+        ESP_LOGI(TAG, "Rejecting mode %d, previous control mode %d still pending", (int)mode,
+                 (int)current_control_mode_.load());
+        return false;
+    }
+    ESP_LOGI(TAG, "ChangePlayControlMode current_control_mode_ %d mode %d",
+             (int)current_control_mode_.load(), (int)mode);
+
+    switch (mode) {
+        case PlayControlMode::kPause:
+            http_stream_->StopRequest();
+            http_stream_->CleanDataQueue();
+            play_state_ = PlayState::kPausing;
+            break;
+
+        case PlayControlMode::kResume:
+            play_state_ = PlayState::kResuming;
+            pause_cv_.notify_all();
+            break;
+
+        case PlayControlMode::kUnknown:
+        case PlayControlMode::kControlHandled:
+        case PlayControlMode::kNext:
+        case PlayControlMode::kPrevious:
+            play_state_ = PlayState::kPlaying;
+            pause_cv_.notify_all();
+            break;
+
+        case PlayControlMode::kStop:
+            play_state_ = PlayState::kIdle;
+            pause_cv_.notify_all();
+            break;
+        default:
+            break;
+    }
+    current_control_mode_ = mode;
+    return true;
+}
+
+bool MusicPlayer::CanChangePlayControlMode(const PlayControlMode& mode) {
+    if (mode == current_control_mode_) {
+        return false;
+    }
+    if (mode == PlayControlMode::kStop) {
+        return true;
+    }
+    if (current_control_mode_ == PlayControlMode::kUnknown) {
+        return false;
+    }
+    if (current_control_mode_ == PlayControlMode::kResume && mode == PlayControlMode::kPause) {
+        return false;
+    }
+    return true;
+}
+
+// =============================================================================
+// 任务入口
+// =============================================================================
+
 void MusicPlayer::PlayMusicTask(void* arg) {
     auto* player = static_cast<MusicPlayer*>(arg);
     player->PlayMusicLoop();
     vTaskDelete(nullptr);
 }
 
-bool MusicPlayer::ProcessReceivedChunk(DataChunk& chunk, RingBuffer& buffer, bool& track_complete,
-                                       bool& track_error, const char* log_tag) {
-    if (chunk.status == DataStatus::kEos) {
-        ESP_LOGI(TAG, "%s EOS signal", log_tag);
-        if (chunk.data) {
-            delete[] chunk.data;
-        }
-        track_complete = true;
-        return false;
-    }
-    if (chunk.status == DataStatus::kError) {
-        ESP_LOGE(TAG, "%s error signal", log_tag);
-        if (chunk.data) {
-            delete[] chunk.data;
-        }
-        track_error = true;
-        return false;
+// =============================================================================
+// 主循环
+// =============================================================================
+
+void MusicPlayer::PlayMusicLoop() {
+    current_control_mode_ = PlayControlMode::kControlHandled;
+
+    auto loop_mode = loop_mode_;
+    int playlist_size = static_cast<int>(current_music_list_.size());
+
+    std::vector<int> shuffle_order;
+    if (loop_mode == LoopMode::kShuffle && playlist_size > 0) {
+        shuffle_order.resize(playlist_size);
+        for (int i = 0; i < playlist_size; i++)
+            shuffle_order[i] = i;
+        ShuffleArray(shuffle_order, playlist_size);
     }
 
-    buffer.write(chunk.data, chunk.size);
-    delete[] chunk.data;
+    while (play_state_ != PlayState::kIdle) {
+        if (current_track_index_ < 0 || current_track_index_ >= playlist_size) {
+            if (loop_mode == LoopMode::kPlayOnce) {
+                ESP_LOGI(TAG, "No more tracks to play (play once mode)");
+                break;
+            }
+            current_track_index_ = 0;
+            if (loop_mode == LoopMode::kShuffle) {
+                ShuffleArray(shuffle_order, playlist_size);
+                ESP_LOGI(TAG, "Reshuffled playlist");
+            }
+            ESP_LOGI(TAG, "Looping back to first track");
+        }
 
-    return true;
+        int actual_index = (loop_mode == LoopMode::kShuffle)
+                               ? shuffle_order[current_track_index_.load()]
+                               : current_track_index_.load();
+        auto* music = current_music_list_[actual_index];
+        auto msg =
+            std::format("Playing track {}/{} [actual={}]: {}", 1 + current_track_index_.load(),
+                        playlist_size, actual_index, music->ToString());
+        ESP_LOGI(TAG, "%s", msg.c_str());
+        display_->SetChatMessage("music", msg.c_str());
+
+        PreparePlayState();
+
+        DownloadLyrics(*music);
+
+        DecodePlayLoop(*music);
+
+        HandleControlSignal();
+
+        if (current_control_mode_ == PlayControlMode::kPause ||
+            current_control_mode_ == PlayControlMode::kStop) {
+            break;
+        }
+    }
+
+    play_state_ = PlayState::kIdle;
+    current_control_mode_ = PlayControlMode::kUnknown;
+    display_->SetChatMessage("music", "Music Stopped");
+    auto& board = Board::GetInstance();
+    board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+    ESP_LOGI(TAG, "Decode play task exiting");
 }
 
-// Peek 队列检查缓冲区是否有足够空间容纳下一个 chunk
-static bool CanFitNextChunk(RingBuffer& buffer, QueueHandle_t queue) {
-    DataChunk chunk;
-    if (xQueuePeek(queue, &chunk, 0) != pdPASS)
-        return false;
-    return (buffer.capacity() - buffer.size()) >= chunk.size;
+// =============================================================================
+// 控制信号
+// =============================================================================
+
+bool MusicPlayer::HandleControlSignal() {
+    if (current_control_mode_ == PlayControlMode::kStop) {
+        current_control_mode_ = PlayControlMode::kControlHandled;
+        ESP_LOGI(TAG, "Decode play stopped by user");
+        display_->SetChatMessage("music", "Stopped");
+        http_stream_->StopRequest();
+        http_stream_->CleanDataQueue();
+        play_state_ = PlayState::kIdle;
+        return true;
+    }
+    if (current_control_mode_ == PlayControlMode::kNext ||
+        current_control_mode_ == PlayControlMode::kControlHandled) {
+        current_control_mode_ = PlayControlMode::kControlHandled;
+        current_track_index_++;
+        display_->SetChatMessage("music", "Next music");
+        http_stream_->StopRequest();
+        http_stream_->CleanDataQueue();
+        return true;
+    }
+    if (current_control_mode_ == PlayControlMode::kPrevious) {
+        current_control_mode_ = PlayControlMode::kControlHandled;
+        current_track_index_ = std::max(0, --current_track_index_);
+        display_->SetChatMessage("music", "Previous music");
+        http_stream_->StopRequest();
+        http_stream_->CleanDataQueue();
+        return true;
+    }
+    return false;
 }
+
+bool MusicPlayer::BreakDecodePlayLoop() {
+    return current_control_mode_ == PlayControlMode::kStop ||
+           current_control_mode_ == PlayControlMode::kNext ||
+           current_control_mode_ == PlayControlMode::kPrevious;
+}
+
+// =============================================================================
+// 资源清理
+// =============================================================================
+
+void MusicPlayer::CleanupResources() {
+    play_state_ = PlayState::kIdle;
+    pause_cv_.notify_all();
+    if (pause_ack_semaphore_) {
+        xSemaphoreGive(pause_ack_semaphore_);
+    }
+
+    http_stream_->CleanDataQueue();
+
+    if (decode_task_handle_) {
+        vTaskDelete(decode_task_handle_);
+        decode_task_handle_ = nullptr;
+    }
+
+    current_track_index_ = 0;
+}
+
+// =============================================================================
+// 解码主循环
+// =============================================================================
 
 void MusicPlayer::DecodePlayLoop(Music& music) {
     auto& app = Application::GetInstance();
@@ -337,6 +505,10 @@ void MusicPlayer::DecodePlayLoop(Music& music) {
     http_stream_->CleanDataQueue();
 }
 
+// =============================================================================
+// 状态处理
+// =============================================================================
+
 void MusicPlayer::PreparePlayState() {
     auto& app = Application::GetInstance();
     if (app.GetDeviceState() == kDeviceStateIdle) {
@@ -350,151 +522,6 @@ void MusicPlayer::PreparePlayState() {
     }
     auto& board = Board::GetInstance();
     board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
-}
-
-void MusicPlayer::PlayMusicLoop() {
-    current_control_mode_ = PlayControlMode::kControlHandled;
-
-    auto loop_mode = loop_mode_;
-    int playlist_size = static_cast<int>(current_music_list_.size());
-
-    std::vector<int> shuffle_order;
-    if (loop_mode == LoopMode::kShuffle && playlist_size > 0) {
-        shuffle_order.resize(playlist_size);
-        for (int i = 0; i < playlist_size; i++)
-            shuffle_order[i] = i;
-        ShuffleArray(shuffle_order, playlist_size);
-    }
-
-    while (play_state_ != PlayState::kIdle) {
-        if (current_track_index_ < 0 || current_track_index_ >= playlist_size) {
-            if (loop_mode == LoopMode::kPlayOnce) {
-                ESP_LOGI(TAG, "No more tracks to play (play once mode)");
-                break;
-            }
-            current_track_index_ = 0;
-            if (loop_mode == LoopMode::kShuffle) {
-                ShuffleArray(shuffle_order, playlist_size);
-                ESP_LOGI(TAG, "Reshuffled playlist");
-            }
-            ESP_LOGI(TAG, "Looping back to first track");
-        }
-
-        int actual_index = (loop_mode == LoopMode::kShuffle)
-                               ? shuffle_order[current_track_index_.load()]
-                               : current_track_index_.load();
-        auto* music = current_music_list_[actual_index];
-        auto msg =
-            std::format("Playing track {}/{} [actual={}]: {}", 1 + current_track_index_.load(),
-                        playlist_size, actual_index, music->ToString());
-        ESP_LOGI(TAG, "%s", msg.c_str());
-        display_->SetChatMessage("music", msg.c_str());
-
-        PreparePlayState();
-
-        DownloadLyrics(*music);
-
-        DecodePlayLoop(*music);
-
-        HandleControlSignal();
-
-        if (current_control_mode_ == PlayControlMode::kPause ||
-            current_control_mode_ == PlayControlMode::kStop) {
-            break;
-        }
-    }
-
-    play_state_ = PlayState::kIdle;
-    current_control_mode_ = PlayControlMode::kUnknown;
-    display_->SetChatMessage("music", "Music Stopped");
-    auto& board = Board::GetInstance();
-    board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
-    ESP_LOGI(TAG, "Decode play task exiting");
-}
-
-void MusicPlayer::DownloadLyrics(Music& music) {
-    auto resource = MusicResource::NewMusicResource();
-    auto lyrics_url = resource->GetLyricsUrl(music);
-    if (lyrics_url.empty()) {
-        ESP_LOGW(TAG, "No lyrics for music: %s", music.ToString().c_str());
-        return;
-    }
-    static bool is_downloading_lyrics_ = false;
-    if (is_downloading_lyrics_) {
-        ESP_LOGW(TAG, "Already downloading lyrics for music: %s", music.ToString().c_str());
-        return;
-    }
-    is_downloading_lyrics_ = true;
-
-    lyrics_->Clear();
-
-    RestfulClient client;
-    auto res = client.Get(lyrics_url);
-    if (res.empty()) {
-        ESP_LOGE(TAG, "Failed to download lyrics for music: %s", music.ToString().c_str());
-        is_downloading_lyrics_ = false;
-        return;
-    }
-    resource->ParseLyricsFromJson(res, *lyrics_);
-    is_downloading_lyrics_ = false;
-}
-
-void MusicPlayer::ShuffleArray(std::vector<int>& arr, int size) {
-    for (int i = size - 1; i > 0; i--) {
-        int j = esp_random() % (i + 1);
-        std::swap(arr[i], arr[j]);
-    }
-}
-
-void MusicPlayer::ShowLyrics() {
-    if (!lyrics_->HasLyrics()) {
-        return;
-    }
-    std::string line;
-    auto line_index = lyrics_->GetCurrentLineIndex();
-    if (!lyrics_->GetLyricAtTime(current_position_ms_, line)) {
-        return;
-    }
-    if (line_index == lyrics_->GetCurrentLineIndex()) {
-        return;
-    }
-    display_->SetChatMessage("music", line.c_str());
-}
-
-bool MusicPlayer::HandleControlSignal() {
-    if (current_control_mode_ == PlayControlMode::kStop) {
-        current_control_mode_ = PlayControlMode::kControlHandled;
-        ESP_LOGI(TAG, "Decode play stopped by user");
-        display_->SetChatMessage("music", "Stopped");
-        http_stream_->StopRequest();
-        http_stream_->CleanDataQueue();
-        play_state_ = PlayState::kIdle;
-        return true;
-    }
-    if (current_control_mode_ == PlayControlMode::kNext ||
-        current_control_mode_ == PlayControlMode::kControlHandled) {
-        current_control_mode_ = PlayControlMode::kControlHandled;
-        current_track_index_++;
-        display_->SetChatMessage("music", "Next music");
-        http_stream_->StopRequest();
-        http_stream_->CleanDataQueue();
-        return true;
-    }
-    if (current_control_mode_ == PlayControlMode::kPrevious) {
-        current_control_mode_ = PlayControlMode::kControlHandled;
-        current_track_index_ = std::max(0, --current_track_index_);
-        display_->SetChatMessage("music", "Previous music");
-        http_stream_->StopRequest();
-        http_stream_->CleanDataQueue();
-        return true;
-    }
-    return false;
-}
-
-bool MusicPlayer::BreakDecodePlayLoop() {
-    return current_control_mode_ == PlayControlMode::kStop ||
-           current_control_mode_ == PlayControlMode::kNext ||
-           current_control_mode_ == PlayControlMode::kPrevious;
 }
 
 bool MusicPlayer::HandlePauseState() {
@@ -538,156 +565,38 @@ void MusicPlayer::HandleResumeState(const std::string& url, RingBuffer& data_buf
     }
 }
 
-void MusicPlayer::OutputAudioWithFadeIn(int output_samples) {
-    if (was_outputting_silence_) {
-        int fade_samples = audio_codec_->output_sample_rate() *
-                           audio_codec_->output_channels() * 5 / 1000;
-        if (fade_samples > output_samples)
-            fade_samples = output_samples;
-        ApplyFadeIn(output_pcm_buffer_.data(), fade_samples);
-    }
+// =============================================================================
+// 数据处理
+// =============================================================================
 
-    audio_codec_->OutputData(output_pcm_buffer_.data(), output_samples);
-    was_outputting_silence_ = false;
-    Application::GetInstance().GetAudioService().UpdateLastOutputTime();
-}
-
-void MusicPlayer::HandleBufferUnderrun(int silence_duration_ms, int fade_duration_ms) {
-    int silence_samples = audio_codec_->output_sample_rate() * audio_codec_->output_channels() *
-                          silence_duration_ms / 1000;
-    if (silence_samples <= 0 || silence_samples > (int)output_pcm_buffer_.size()) {
-        return;
-    }
-
-    if (!was_outputting_silence_ && output_pcm_buffer_.size() > 0) {
-        int valid = std::min((int)output_pcm_buffer_.size(), silence_samples);
-        int fade_samples = audio_codec_->output_sample_rate() * audio_codec_->output_channels() *
-                           fade_duration_ms / 1000;
-        if (fade_samples > valid)
-            fade_samples = valid;
-        ApplyFadeOut(output_pcm_buffer_.data(), fade_samples);
-        int remaining = silence_samples - fade_samples;
-        if (remaining > 0) {
-            memset(output_pcm_buffer_.data() + fade_samples, 0, remaining * sizeof(int16_t));
+bool MusicPlayer::ProcessReceivedChunk(DataChunk& chunk, RingBuffer& buffer, bool& track_complete,
+                                       bool& track_error, const char* log_tag) {
+    if (chunk.status == DataStatus::kEos) {
+        ESP_LOGI(TAG, "%s EOS signal", log_tag);
+        if (chunk.data) {
+            delete[] chunk.data;
         }
-    } else {
-        memset(output_pcm_buffer_.data(), 0, silence_samples * sizeof(int16_t));
-    }
-    audio_codec_->OutputData(output_pcm_buffer_.data(), silence_samples);
-    was_outputting_silence_ = true;
-}
-
-void MusicPlayer::FadeOutAndStop(int fade_duration_ms) {
-    if (was_outputting_silence_ || output_pcm_buffer_.size() == 0) {
-        return;
-    }
-
-    int fade_samples = audio_codec_->output_sample_rate() * audio_codec_->output_channels() *
-                       fade_duration_ms / 1000;
-    if (fade_samples > (int)output_pcm_buffer_.size()) {
-        fade_samples = (int)output_pcm_buffer_.size();
-    }
-    if (fade_samples <= 0) {
-        return;
-    }
-
-    ApplyFadeOut(output_pcm_buffer_.data(), fade_samples);
-    audio_codec_->OutputData(output_pcm_buffer_.data(), fade_samples);
-    vTaskDelay(pdMS_TO_TICKS(fade_duration_ms + 5));
-}
-
-bool MusicPlayer::CanChangePlayControlMode(const PlayControlMode& mode) {
-    if (mode == current_control_mode_) {
+        track_complete = true;
         return false;
     }
-    if (mode == PlayControlMode::kStop) {
-        return true;
-    }
-    if (current_control_mode_ == PlayControlMode::kUnknown) {
+    if (chunk.status == DataStatus::kError) {
+        ESP_LOGE(TAG, "%s error signal", log_tag);
+        if (chunk.data) {
+            delete[] chunk.data;
+        }
+        track_error = true;
         return false;
     }
-    if (current_control_mode_ == PlayControlMode::kResume && mode == PlayControlMode::kPause) {
-        return false;
-    }
+
+    buffer.write(chunk.data, chunk.size);
+    delete[] chunk.data;
+
     return true;
 }
 
-bool MusicPlayer::ChangePlayControlMode(const PlayControlMode& mode) {
-    if (!CanChangePlayControlMode(mode)) {
-        ESP_LOGI(TAG, "Rejecting mode %d, previous control mode %d still pending", (int)mode,
-                 (int)current_control_mode_.load());
-        return false;
-    }
-    ESP_LOGI(TAG, "ChangePlayControlMode current_control_mode_ %d mode %d",
-             (int)current_control_mode_.load(), (int)mode);
-
-    switch (mode) {
-        case PlayControlMode::kPause:
-            http_stream_->StopRequest();
-            http_stream_->CleanDataQueue();
-            play_state_ = PlayState::kPausing;
-            break;
-
-        case PlayControlMode::kResume:
-            play_state_ = PlayState::kResuming;
-            pause_cv_.notify_all();
-            break;
-
-        case PlayControlMode::kUnknown:
-        case PlayControlMode::kControlHandled:
-        case PlayControlMode::kNext:
-        case PlayControlMode::kPrevious:
-            play_state_ = PlayState::kPlaying;
-            pause_cv_.notify_all();
-            break;
-
-        case PlayControlMode::kStop:
-            play_state_ = PlayState::kIdle;
-            pause_cv_.notify_all();
-            break;
-        default:
-            break;
-    }
-    current_control_mode_ = mode;
-    return true;
-}
-
-void MusicPlayer::CleanupResources() {
-    play_state_ = PlayState::kIdle;
-    pause_cv_.notify_all();
-    if (pause_ack_semaphore_) {
-        xSemaphoreGive(pause_ack_semaphore_);
-    }
-
-    http_stream_->CleanDataQueue();
-
-    if (decode_task_handle_) {
-        vTaskDelete(decode_task_handle_);
-        decode_task_handle_ = nullptr;
-    }
-
-    current_track_index_ = 0;
-}
-
-bool MusicPlayer::OnWakeWordDetected(void* data) {
-    auto& app = Application::GetInstance();
-    auto state = app.GetDeviceState();
-    if (state != kDeviceStateIdle) {
-        return false;
-    }
-    if (play_state_ != PlayState::kPlaying) {
-        return false;
-    }
-    ChangePlayControlMode(PlayControlMode::kPause);
-
-    if (pause_ack_semaphore_) {
-        xSemaphoreTake(pause_ack_semaphore_, pdMS_TO_TICKS(1000));
-    }
-    ESP_LOGI(TAG, "Wake word detected, pausing music");
-    auto helper = new XiaozhiHelper();
-    helper->ReRaiseWakeWordDetectedInTask([helper]() { delete helper; });
-    return true;
-}
+// =============================================================================
+// 解码器
+// =============================================================================
 
 bool MusicPlayer::OpenDecoder(esp_audio_simple_dec_type_t type) {
     if (type == ESP_AUDIO_SIMPLE_DEC_TYPE_NONE) {
@@ -733,32 +642,6 @@ void MusicPlayer::CloseDecoder() {
         esp_audio_simple_dec_close(decoder_);
         decoder_ = nullptr;
     }
-}
-
-bool MusicPlayer::HandleFastForward(int samples, const esp_audio_simple_dec_info_t& info) {
-    if (fast_forward_to_ms_ <= 0) return false;
-
-    if (current_position_ms_.load() < fast_forward_to_ms_) {
-        int frames = samples / info.channel;
-        if (frames > 0 && info.sample_rate > 0) {
-            int32_t delta_ms = (int32_t)((int64_t)frames * 1000 / info.sample_rate);
-            current_position_ms_.fetch_add(delta_ms);
-        }
-        if (total_duration_ms_.load() == 0 && info.bitrate > 0) {
-            size_t cl = http_stream_->GetContentLength();
-            if (cl > 0) total_duration_ms_ = (int32_t)((uint64_t)cl * 8000 / info.bitrate);
-        }
-        static int ff_tick = 0;
-        if (++ff_tick >= 50) {
-            Application::GetInstance().GetAudioService().UpdateLastOutputTime();
-            ff_tick = 0;
-        }
-        return true;
-    }
-
-    ESP_LOGI(TAG, "Fast-forward complete, reached %ld ms", (long)fast_forward_to_ms_);
-    fast_forward_to_ms_ = 0;
-    return false;
 }
 
 bool MusicPlayer::DecodeAndPlayFrame(RingBuffer& data_buffer) {
@@ -835,6 +718,36 @@ bool MusicPlayer::DecodeAndPlayFrame(RingBuffer& data_buffer) {
         return true;
     }
 }
+
+bool MusicPlayer::HandleFastForward(int samples, const esp_audio_simple_dec_info_t& info) {
+    if (fast_forward_to_ms_ <= 0) return false;
+
+    if (current_position_ms_.load() < fast_forward_to_ms_) {
+        int frames = samples / info.channel;
+        if (frames > 0 && info.sample_rate > 0) {
+            int32_t delta_ms = (int32_t)((int64_t)frames * 1000 / info.sample_rate);
+            current_position_ms_.fetch_add(delta_ms);
+        }
+        if (total_duration_ms_.load() == 0 && info.bitrate > 0) {
+            size_t cl = http_stream_->GetContentLength();
+            if (cl > 0) total_duration_ms_ = (int32_t)((uint64_t)cl * 8000 / info.bitrate);
+        }
+        static int ff_tick = 0;
+        if (++ff_tick >= 50) {
+            Application::GetInstance().GetAudioService().UpdateLastOutputTime();
+            ff_tick = 0;
+        }
+        return true;
+    }
+
+    ESP_LOGI(TAG, "Fast-forward complete, reached %ld ms", (long)fast_forward_to_ms_);
+    fast_forward_to_ms_ = 0;
+    return false;
+}
+
+// =============================================================================
+// PCM 转换与时间更新
+// =============================================================================
 
 void MusicPlayer::ConvertPcmIfNeeded(int input_rate, int input_channels, int input_samples,
                                      int& output_samples, int& output_channels) {
@@ -927,4 +840,155 @@ void MusicPlayer::UpdateTimeInfo(int codec_output_rate, int output_samples, int 
             }
         }
     }
+}
+
+// =============================================================================
+// 音频输出
+// =============================================================================
+
+void MusicPlayer::OutputAudioWithFadeIn(int output_samples) {
+    if (was_outputting_silence_) {
+        int fade_samples = audio_codec_->output_sample_rate() *
+                           audio_codec_->output_channels() * 5 / 1000;
+        if (fade_samples > output_samples)
+            fade_samples = output_samples;
+        ApplyFadeIn(output_pcm_buffer_.data(), fade_samples);
+    }
+
+    audio_codec_->OutputData(output_pcm_buffer_.data(), output_samples);
+    was_outputting_silence_ = false;
+    Application::GetInstance().GetAudioService().UpdateLastOutputTime();
+}
+
+void MusicPlayer::HandleBufferUnderrun(int silence_duration_ms, int fade_duration_ms) {
+    int silence_samples = audio_codec_->output_sample_rate() * audio_codec_->output_channels() *
+                          silence_duration_ms / 1000;
+    if (silence_samples <= 0 || silence_samples > (int)output_pcm_buffer_.size()) {
+        return;
+    }
+
+    if (!was_outputting_silence_ && output_pcm_buffer_.size() > 0) {
+        int valid = std::min((int)output_pcm_buffer_.size(), silence_samples);
+        int fade_samples = audio_codec_->output_sample_rate() * audio_codec_->output_channels() *
+                           fade_duration_ms / 1000;
+        if (fade_samples > valid)
+            fade_samples = valid;
+        ApplyFadeOut(output_pcm_buffer_.data(), fade_samples);
+        int remaining = silence_samples - fade_samples;
+        if (remaining > 0) {
+            memset(output_pcm_buffer_.data() + fade_samples, 0, remaining * sizeof(int16_t));
+        }
+    } else {
+        memset(output_pcm_buffer_.data(), 0, silence_samples * sizeof(int16_t));
+    }
+    audio_codec_->OutputData(output_pcm_buffer_.data(), silence_samples);
+    was_outputting_silence_ = true;
+}
+
+void MusicPlayer::FadeOutAndStop(int fade_duration_ms) {
+    if (was_outputting_silence_ || output_pcm_buffer_.size() == 0) {
+        return;
+    }
+
+    int fade_samples = audio_codec_->output_sample_rate() * audio_codec_->output_channels() *
+                       fade_duration_ms / 1000;
+    if (fade_samples > (int)output_pcm_buffer_.size()) {
+        fade_samples = (int)output_pcm_buffer_.size();
+    }
+    if (fade_samples <= 0) {
+        return;
+    }
+
+    ApplyFadeOut(output_pcm_buffer_.data(), fade_samples);
+    audio_codec_->OutputData(output_pcm_buffer_.data(), fade_samples);
+    vTaskDelay(pdMS_TO_TICKS(fade_duration_ms + 5));
+}
+
+// =============================================================================
+// 歌词
+// =============================================================================
+
+void MusicPlayer::DownloadLyrics(Music& music) {
+    auto resource = MusicResource::NewMusicResource();
+    auto lyrics_url = resource->GetLyricsUrl(music);
+    if (lyrics_url.empty()) {
+        ESP_LOGW(TAG, "No lyrics for music: %s", music.ToString().c_str());
+        return;
+    }
+    static bool is_downloading_lyrics_ = false;
+    if (is_downloading_lyrics_) {
+        ESP_LOGW(TAG, "Already downloading lyrics for music: %s", music.ToString().c_str());
+        return;
+    }
+    is_downloading_lyrics_ = true;
+
+    lyrics_->Clear();
+
+    RestfulClient client;
+    auto res = client.Get(lyrics_url);
+    if (res.empty()) {
+        ESP_LOGE(TAG, "Failed to download lyrics for music: %s", music.ToString().c_str());
+        is_downloading_lyrics_ = false;
+        return;
+    }
+    resource->ParseLyricsFromJson(res, *lyrics_);
+    is_downloading_lyrics_ = false;
+}
+
+void MusicPlayer::ShowLyrics() {
+    if (!lyrics_->HasLyrics()) {
+        return;
+    }
+    std::string line;
+    auto line_index = lyrics_->GetCurrentLineIndex();
+    if (!lyrics_->GetLyricAtTime(current_position_ms_, line)) {
+        return;
+    }
+    if (line_index == lyrics_->GetCurrentLineIndex()) {
+        return;
+    }
+    display_->SetChatMessage("music", line.c_str());
+}
+
+void MusicPlayer::ShuffleArray(std::vector<int>& arr, int size) {
+    for (int i = size - 1; i > 0; i--) {
+        int j = esp_random() % (i + 1);
+        std::swap(arr[i], arr[j]);
+    }
+}
+
+// =============================================================================
+// 事件回调
+// =============================================================================
+
+bool MusicPlayer::OnWakeWordDetected(void* data) {
+    auto& app = Application::GetInstance();
+    auto state = app.GetDeviceState();
+    if (state != kDeviceStateIdle) {
+        return false;
+    }
+    if (play_state_ != PlayState::kPlaying) {
+        return false;
+    }
+    ChangePlayControlMode(PlayControlMode::kPause);
+
+    if (pause_ack_semaphore_) {
+        xSemaphoreTake(pause_ack_semaphore_, pdMS_TO_TICKS(1000));
+    }
+    ESP_LOGI(TAG, "Wake word detected, pausing music");
+    auto helper = new XiaozhiHelper();
+    helper->ReRaiseWakeWordDetectedInTask([helper]() { delete helper; });
+    return true;
+}
+
+// =============================================================================
+// 进度重置
+// =============================================================================
+
+void MusicPlayer::ResetPlaybackProgress() {
+    current_position_ms_ = 0;
+    fast_forward_to_ms_ = 0;
+    total_duration_ms_ = 0;
+    decoder_type_ = ESP_AUDIO_SIMPLE_DEC_TYPE_NONE;
+    ESP_LOGD(TAG, "Playback progress reset");
 }

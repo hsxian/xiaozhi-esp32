@@ -190,9 +190,7 @@ void Application::Run() {
         MAIN_EVENT_STOP_LISTENING |
         MAIN_EVENT_ACTIVATION_DONE |
         MAIN_EVENT_STATE_CHANGED |
-        MAIN_EVENT_PLAYBACK_DRAINED|
-        MAIN_EVENT_ALARM_CLOCK_RINGING
-        ;
+        MAIN_EVENT_PLAYBACK_DRAINED;
 
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);

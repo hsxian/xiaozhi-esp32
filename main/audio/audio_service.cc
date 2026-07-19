@@ -820,9 +820,5 @@ bool AudioService::InitializeAudioEngine() {
     }
     audio_engine_initialized_ = true;
     audio_engine_->EnableDeviceAec(device_aec_enabled_);
-#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
-    return wake_word_ != nullptr && dynamic_cast<AfeWakeWord*>(wake_word_.get()) != nullptr;
-#else
-    return false;
-#endif
+    return true;
 }

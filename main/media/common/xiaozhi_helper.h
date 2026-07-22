@@ -3,5 +3,5 @@
 class XiaozhiHelper {
 public:
     bool IsNeedWaitDeviceIdleState() const;
-    void ReRaiseWakeWordDetectedInTask(const std::function<void()>& callback=nullptr) const;
+    void ReRaiseWakeWordDetectedInTask(const std::function<void()>& callback = nullptr) const;
 };

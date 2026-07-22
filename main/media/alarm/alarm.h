@@ -15,7 +15,7 @@ enum class RepeatMode : uint8_t {
 };
 
 // repeat_days 预定义常量（bit 0=周日, bit 1=周一, ..., bit 6=周六）
-inline constexpr uint8_t REPEAT_DAYS_NONE     = 0b0000000;  // 不重复
+inline constexpr uint8_t REPEAT_DAYS_NONE = 0b0000000;      // 不重复
 inline constexpr uint8_t REPEAT_DAYS_WORKDAYS = 0b0111110;  // 周一~周五
 inline constexpr uint8_t REPEAT_DAYS_WEEKENDS = 0b1000001;  // 周六~周日
 inline constexpr uint8_t REPEAT_DAYS_EVERYDAY = 0b1111111;  // 每天
@@ -35,25 +35,25 @@ enum class AlarmState : uint8_t {
 // 闹钟结构体
 // 绝对时间闹钟，如果是要相对时间，需要先获取当前时间（比如现在是10:00:00），加上设置值（比如10分钟），应设置为10:10:00
 struct Alarm {
-    std::string id;          // 闹钟唯一ID
-    std::string name;        // 闹钟名称
-    uint8_t hour;                // 小时 (0-23)
-    uint8_t minute;              // 分钟 (0-59)
-    uint8_t second;              // 秒 (0-59)
-    uint8_t volume;              // 音量 (0-100)
-    RepeatMode repeat_mode;  // 重复模式
-    uint8_t repeat_days;         // 自定义重复日期（周日到周六，共7天,每个位表示一个天）最大值为127
-    AlarmState state;        // 闹钟状态
-    uint8_t snooze_duration;     // 贪睡时长（分钟），默认5分钟
-    uint8_t snooze_count;    // 剩余贪睡次数，-1表示无限次
+    std::string id;           // 闹钟唯一ID
+    std::string name;         // 闹钟名称
+    uint8_t hour;             // 小时 (0-23)
+    uint8_t minute;           // 分钟 (0-59)
+    uint8_t second;           // 秒 (0-59)
+    uint8_t volume;           // 音量 (0-100)
+    RepeatMode repeat_mode;   // 重复模式
+    uint8_t repeat_days;      // 自定义重复日期（周日到周六，共7天,每个位表示一个天）最大值为127
+    AlarmState state;         // 闹钟状态
+    uint8_t snooze_duration;  // 贪睡时长（分钟），默认5分钟
+    uint8_t snooze_count;     // 剩余贪睡次数，-1表示无限次
     time_t start_ring_time;   // 开始响铃时间
     // 默认构造函数
-    Alarm();        
+    Alarm();
 
     // 带参数构造函数
     Alarm(const std::string& alarm_id, const std::string& alarm_name, int h, int m, int s = 0,
           int vol = 80, RepeatMode mode = RepeatMode::ONCE, int repeat_days = 0);
-      
+
     // 转换为JSON字符串
     std::string ToJson() const;
     void ToJson(cJSON* root) const;

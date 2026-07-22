@@ -58,7 +58,7 @@ bool QQMusicResource::Search(const QueryBase& query, std::vector<Music*>& music_
     }
 #endif
 
-    return MusicResource::Search(url, headers, {"data","song", "list"}, music_list);
+    return MusicResource::Search(url, headers, {"data", "song", "list"}, music_list);
 }
 
 bool QQMusicResource::GetFavoriteSongs(const int& count, std::vector<Music*>& music_list) {
@@ -70,9 +70,11 @@ bool QQMusicResource::GetFavoriteSongs(const int& count, std::vector<Music*>& mu
 #ifdef CONFIG_QQ_MUSIC_FAVORITE_ID
     while (remaining > 0) {
         int num = std::min(remaining, kMaxNumPerPage);
-        auto url =
-            std::format("{}/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg?type=1&utf8=1&onlysong=1&disstid={}&format=json&song_begin={}&song_num={}",
-                        CONFIG_QQ_MUSIC_RESOURCE_ADDRESS, CONFIG_QQ_MUSIC_FAVORITE_ID, page * num, num);
+        auto url = std::format(
+            "{}/qzone/fcg-bin/"
+            "fcg_ucc_getcdinfo_byids_cp.fcg?type=1&utf8=1&onlysong=1&disstid={}&format=json&song_"
+            "begin={}&song_num={}",
+            CONFIG_QQ_MUSIC_RESOURCE_ADDRESS, CONFIG_QQ_MUSIC_FAVORITE_ID, page * num, num);
 
         std::map<std::string, std::string> headers;
         headers["Referer"] = CONFIG_QQ_MUSIC_RESOURCE_ADDRESS;
@@ -106,9 +108,10 @@ void QQMusicResource::ParseLyricsFromJson(const std::string& json, Lyrics& lyric
 
 std::string QQMusicResource::GetUrl(Music& music) {
     if (music.url.empty()) {
-          RestfulClient restful_client;
+        RestfulClient restful_client;
 
-        auto url = std::format("{}/music_open_api.php?type=json&mid={}", CONFIG_QQ_MUSIC_COOKIE, music.vid);
+        auto url = std::format("{}/music_open_api.php?type=json&mid={}", CONFIG_QQ_MUSIC_COOKIE,
+                               music.vid);
         auto response = restful_client.Get(url);
         if (!response.empty()) {
             auto json = cJSON_Parse(response.c_str());
@@ -130,7 +133,8 @@ std::string QQMusicResource::GetUrl(Music& music) {
 
 std::string QQMusicResource::GetLyricsUrl(Music& music) {
     if (music.lrc.empty()) {
-        auto url = std::format("{}/music_open_api.php?type=json&mid={}", CONFIG_QQ_MUSIC_COOKIE, music.vid);
+        auto url = std::format("{}/music_open_api.php?type=json&mid={}", CONFIG_QQ_MUSIC_COOKIE,
+                               music.vid);
         music.lrc = url;
     }
     return music.lrc;

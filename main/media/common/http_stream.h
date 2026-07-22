@@ -1,11 +1,11 @@
 #pragma once
 
+#include <freertos/queue.h>
 #include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
 #include "esp_http_client.h"
-#include <freertos/queue.h>
 
 // 数据块状态枚举（使用 uint8_t 节省内存）
 enum class DataStatus : uint8_t {
@@ -36,10 +36,9 @@ public:
     int64_t GetDownloadBytesReceived() const;
 
 private:
-
-    static constexpr int QUEUE_SIZE = 16;             // 队列大小
-    static constexpr int HIGH_WATER_MARK = 8;         // 降低高水位标记，更早开始节流
-    static constexpr int CRITICAL_WATER_MARK = 14;    // 临界水位，接近满队列
+    static constexpr int QUEUE_SIZE = 16;           // 队列大小
+    static constexpr int HIGH_WATER_MARK = 8;       // 降低高水位标记，更早开始节流
+    static constexpr int CRITICAL_WATER_MARK = 14;  // 临界水位，接近满队列
 
     static void OpenTask(void* arg);
     static esp_err_t http_event_handler(esp_http_client_event_t* evt);

@@ -23,7 +23,8 @@ void XiaozhiHelper::ReRaiseWakeWordDetectedInTask(const std::function<void()>& c
             app.ClearEventFromGroup(MAIN_EVENT_WAKE_WORD_DETECTED);
             vTaskDelay(pdMS_TO_TICKS(1000));
             app.AppendEventToGroup(MAIN_EVENT_WAKE_WORD_DETECTED);
-            if(callback && *callback) (*callback)();
+            if (callback && *callback)
+                (*callback)();
             delete callback;
             vTaskDelete(nullptr);
         },

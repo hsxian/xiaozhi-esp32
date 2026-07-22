@@ -30,13 +30,15 @@ bool JsonHelper::GetNumber(const cJSON* item, const char* key, int& value) {
 const cJSON* JsonHelper::GetObject(const cJSON* item, const std::vector<const char*>& keys) {
     const cJSON* current = item;
     for (const auto& key : keys) {
-        if (!current) return nullptr;
+        if (!current)
+            return nullptr;
         current = cJSON_GetObjectItem(current, key);
     }
     return current;
 };
 
-const cJSON* JsonHelper::GetArrayItem(const cJSON* item, const std::vector<const char*>& keys, const int index) {
+const cJSON* JsonHelper::GetArrayItem(const cJSON* item, const std::vector<const char*>& keys,
+                                      const int index) {
     const cJSON* array = GetObject(item, keys);
     if (array && cJSON_IsArray(array)) {
         return cJSON_GetArrayItem(array, index);

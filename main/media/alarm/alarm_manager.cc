@@ -82,8 +82,6 @@ void PropertyListToAlarm(const PropertyList& properties, Alarm& alarm) {
     alarm.repeat_days = StringToRepeatDays(properties["repeat_days"].value<std::string>());
 }
 
-
-
 void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
     // std::string id;          // 闹钟唯一ID
     // std::string name;        // 闹钟名称
@@ -118,8 +116,7 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         "0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday. "
         "Examples: '1,2,3,4,5' for workdays, '0,6' for weekends, '1,3,5' for Mon/Wed/Fri. "
         "Leave empty string for no repeat.",
-        property_list,
-        [this](const PropertyList& properties) -> ReturnValue {
+        property_list, [this](const PropertyList& properties) -> ReturnValue {
             ESP_LOGI(TAG, "Add alarm");
             Alarm alarm;
             PropertyListToAlarm(properties, alarm);
@@ -136,8 +133,7 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         "default value. Note that alarms are based on absolute time. If you need to set a relative "
         "time, you need to first get the current time (for example, it's 10:00:00 now), add the "
         "setting value (for example, 10 minutes), and set it to 10:10:00.",
-        property_list,
-        [this](const PropertyList& properties) -> ReturnValue {
+        property_list, [this](const PropertyList& properties) -> ReturnValue {
             ESP_LOGI(TAG, "Update alarm");
             Alarm alarm;
             PropertyListToAlarm(properties, alarm);
@@ -280,7 +276,7 @@ void AlarmManager::LoadHolidays() {
     holidays_.clear();
 
     // 获取当前年份
-    time_t now = time(nullptr) + 2*60;
+    time_t now = time(nullptr) + 2 * 60;
     struct tm tm;
     localtime_r(&now, &tm);
     int current_year = tm.tm_year + 1900;
@@ -476,7 +472,6 @@ void AlarmManager::Snooze() {
         auto audio_codec = board.GetAudioCodec();
         audio_codec->SetOutputVolume(original_volume_);
     }
-
 
     if (!is_ringing_ || !current_ringing_alarm_) {
         ESP_LOGW(TAG, "No alarm is ringing");
@@ -755,7 +750,7 @@ void AlarmManager::RingingTask(void* data) {
     int ringing_seconds = 60 * 3;
     stop_ringing_signal_ = false;
     int loop_count = 0;
-    
+
     while (time_diff < ringing_seconds && !stop_ringing_signal_) {
         auto vol = start_volume + 2 * time_diff * (alarm_volume - start_volume) / ringing_seconds;
         vol = std::min(vol, (int)alarm_volume);
@@ -773,7 +768,7 @@ void AlarmManager::RingingTask(void* data) {
         time_diff = difftime(now, old_now);
         loop_count++;
     }
-    //自己停止自己，不能直接调用StopAlarmRinging，因为它会删除当前任务，导致后续代码无法执行
+    // 自己停止自己，不能直接调用StopAlarmRinging，因为它会删除当前任务，导致后续代码无法执行
     ringing_task_handle_ = nullptr;
     if (!stop_ringing_signal_)
         Snooze();
@@ -801,7 +796,7 @@ Alarm* AlarmManager::GetCurrentRingingAlarm() const { return current_ringing_ala
 
 bool AlarmManager::OnWakeWordDetected(void* data) {
     auto& app = Application::GetInstance();
-    if(app.GetDeviceState() != kDeviceStateAlarmClock) {
+    if (app.GetDeviceState() != kDeviceStateAlarmClock) {
         return false;
     }
     stop_ringing_signal_ = true;
@@ -809,8 +804,6 @@ bool AlarmManager::OnWakeWordDetected(void* data) {
     ESP_LOGI(TAG, "Wake word detected, stopping alarm ringing");
 
     auto helper = new XiaozhiHelper();
-    helper->ReRaiseWakeWordDetectedInTask([helper]() {
-        delete helper;
-    });
+    helper->ReRaiseWakeWordDetectedInTask([helper]() { delete helper; });
     return true;
 }

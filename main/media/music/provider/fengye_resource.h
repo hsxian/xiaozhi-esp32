@@ -5,8 +5,8 @@
 #include <string>
 #include <vector>
 #include "../../common/query_base.h"
-#include "music_resource.h"
 #include "../lyrics.h"
+#include "music_resource.h"
 
 class FengyeResource : public MusicResource {
 public:

@@ -17,6 +17,7 @@ public:
     virtual std::string GetLyricsUrl(Music& music) override;
     virtual void ParseLyricsFromJson(const std::string& json, Lyrics& lyrics) override;
     virtual void ParseJsonArray(const cJSON* array, std::vector<Music*>& music_list) override;
+
 private:
 };
 

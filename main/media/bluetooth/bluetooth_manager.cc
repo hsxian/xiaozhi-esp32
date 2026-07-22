@@ -6,10 +6,10 @@
 #include "application.h"
 #include "audio_codec.h"
 #include "board.h"
+#include "boards/bread-compact-wifi/config.h"
 #include "display.h"
 #include "esp_log.h"
 #include "mcp_server.h"
-#include "boards/bread-compact-wifi/config.h"
 
 // a2dpSinkHfpClient includes
 #include "a2dpSinkHfpHf.h"
@@ -46,13 +46,12 @@ void BluetoothManager::Initialize() {
 
     a2dpSinkHfpHf_config_t config = {
         .device_name = "ESP32-Speaker",
-        .i2s_tx_bck = AUDIO_I2S_SPK_GPIO_BCLK,    // Speaker pins
+        .i2s_tx_bck = AUDIO_I2S_SPK_GPIO_BCLK,  // Speaker pins
         .i2s_tx_ws = AUDIO_I2S_SPK_GPIO_LRCK,
         .i2s_tx_dout = AUDIO_I2S_SPK_GPIO_DOUT,
-        .i2s_rx_bck = AUDIO_I2S_MIC_GPIO_DIN,    // Microphone pins (for calls)
+        .i2s_rx_bck = AUDIO_I2S_MIC_GPIO_DIN,  // Microphone pins (for calls)
         .i2s_rx_ws = AUDIO_I2S_MIC_GPIO_WS,
-        .i2s_rx_din = AUDIO_I2S_MIC_GPIO_DIN
-    };
+        .i2s_rx_din = AUDIO_I2S_MIC_GPIO_DIN};
 
     auto ret = a2dpSinkHfpHf_init(&config);
 
@@ -63,10 +62,7 @@ void BluetoothManager::Initialize() {
 // State Queries
 // ============================================================================
 
-std::string BluetoothManager::GetConnectedDeviceName() const {
-    
-    return device_name_;
-}
+std::string BluetoothManager::GetConnectedDeviceName() const { return device_name_; }
 
 // ============================================================================
 // BT Stack Lifecycle (NimBLE BLE Audio)
@@ -76,7 +72,6 @@ bool BluetoothManager::InitBluetoothStack() {
     if (bluetooth_started_)
         return true;
 
-   
     return true;
 }
 
@@ -84,85 +79,83 @@ void BluetoothManager::DeinitBluetoothStack() {
     if (!bluetooth_started_)
         return;
 
-
     bluetooth_started_ = false;
     ESP_LOGI(TAG, "NimBLE BLE Audio stack stopped");
 }
 
 // NimBLE host task
-void BluetoothManager::NimbleTask(void* param) {
-}
+void BluetoothManager::NimbleTask(void* param) {}
 
 // ============================================================================
 // A2DP BLE Audio Event Handler
 // ============================================================================
 
 // void BluetoothManager::OnA2dpEvent(a2dp_event_t event, void* param) {
-    // auto& mgr = GetInstance();
+// auto& mgr = GetInstance();
 
-    // switch (event) {
-    //     case A2DP_EVENT_CONNECTED: {
-    //         a2dp_conn_param_t* conn_param = (a2dp_conn_param_t*)param;
-    //         mgr.connected_ = true;
-    //         {
-    //             std::lock_guard<std::mutex> lock(mgr.mutex_);
-    //             memcpy(mgr.peer_bda_, conn_param->bda, sizeof(esp_bd_addr_t));
-    //             mgr.device_name_ = conn_param->name ? conn_param->name : "Unknown";
-    //         }
-    //         ESP_LOGI(TAG, "BLE Audio connected: %s", mgr.device_name_.c_str());
+// switch (event) {
+//     case A2DP_EVENT_CONNECTED: {
+//         a2dp_conn_param_t* conn_param = (a2dp_conn_param_t*)param;
+//         mgr.connected_ = true;
+//         {
+//             std::lock_guard<std::mutex> lock(mgr.mutex_);
+//             memcpy(mgr.peer_bda_, conn_param->bda, sizeof(esp_bd_addr_t));
+//             mgr.device_name_ = conn_param->name ? conn_param->name : "Unknown";
+//         }
+//         ESP_LOGI(TAG, "BLE Audio connected: %s", mgr.device_name_.c_str());
 
-    //         if (mgr.display_) {
-    //             Display* d = mgr.display_;
-    //             std::string name = mgr.GetConnectedDeviceName();
-    //             Application::GetInstance().Schedule([d, name]() {
-    //                 d->SetChatMessage("bluetooth", ("BT Connected: " + name).c_str());
-    //             });
-    //         }
-    //         break;
-    //     }
-    //     case A2DP_EVENT_DISCONNECTED: {
-    //         mgr.connected_ = false;
-    //         mgr.audio_streaming_ = false;
-    //         {
-    //             std::lock_guard<std::mutex> lock(mgr.mutex_);
-    //             mgr.device_name_.clear();
-    //             memset(mgr.peer_bda_, 0, sizeof(esp_bd_addr_t));
-    //         }
-    //         ESP_LOGI(TAG, "BLE Audio disconnected");
+//         if (mgr.display_) {
+//             Display* d = mgr.display_;
+//             std::string name = mgr.GetConnectedDeviceName();
+//             Application::GetInstance().Schedule([d, name]() {
+//                 d->SetChatMessage("bluetooth", ("BT Connected: " + name).c_str());
+//             });
+//         }
+//         break;
+//     }
+//     case A2DP_EVENT_DISCONNECTED: {
+//         mgr.connected_ = false;
+//         mgr.audio_streaming_ = false;
+//         {
+//             std::lock_guard<std::mutex> lock(mgr.mutex_);
+//             mgr.device_name_.clear();
+//             memset(mgr.peer_bda_, 0, sizeof(esp_bd_addr_t));
+//         }
+//         ESP_LOGI(TAG, "BLE Audio disconnected");
 
-    //         if (mgr.display_) {
-    //             Display* d = mgr.display_;
-    //             Application::GetInstance().Schedule(
-    //                 [d]() { d->SetChatMessage("bluetooth", "BT Disconnected"); });
-    //         }
-    //         break;
-    //     }
-    //     case A2DP_EVENT_AUDIO_STARTED: {
-    //         mgr.audio_streaming_ = true;
-    //         if (mgr.audio_codec_) {
-    //             mgr.audio_codec_->EnableOutput(true);
-    //             mgr.audio_codec_->SetOutputVolume(mgr.bt_volume_);
-    //         }
-    //         ESP_LOGI(TAG, "BLE Audio streaming started");
-    //         break;
-    //     }
-    //     case A2DP_EVENT_AUDIO_STOPPED: {
-    //         mgr.audio_streaming_ = false;
-    //         ESP_LOGI(TAG, "BLE Audio streaming stopped");
-    //         break;
-    //     }
-    //     case A2DP_EVENT_AUDIO_CONFIG: {
-    //         a2dp_audio_config_t* config = (a2dp_audio_config_t*)param;
-    //         mgr.audio_sample_rate_ = config->sample_rate;
-    //         mgr.audio_channels_ = config->channels;
-    //         ESP_LOGI(TAG, "Audio config: sample_rate=%d, channels=%d", mgr.audio_sample_rate_,
-    //                  mgr.audio_channels_);
-    //         break;
-    //     }
-    //     default:
-    //         ESP_LOGD(TAG, "A2DP event: %d", event);
-    //         break;
-    // }
+//         if (mgr.display_) {
+//             Display* d = mgr.display_;
+//             Application::GetInstance().Schedule(
+//                 [d]() { d->SetChatMessage("bluetooth", "BT Disconnected"); });
+//         }
+//         break;
+//     }
+//     case A2DP_EVENT_AUDIO_STARTED: {
+//         mgr.audio_streaming_ = true;
+//         if (mgr.audio_codec_) {
+//             mgr.audio_codec_->EnableOutput(true);
+//             mgr.audio_codec_->SetOutputVolume(mgr.bt_volume_);
+//         }
+//         ESP_LOGI(TAG, "BLE Audio streaming started");
+//         break;
+//     }
+//     case A2DP_EVENT_AUDIO_STOPPED: {
+//         mgr.audio_streaming_ = false;
+//         ESP_LOGI(TAG, "BLE Audio streaming stopped");
+//         break;
+//     }
+//     case A2DP_EVENT_AUDIO_CONFIG: {
+//         a2dp_audio_config_t* config = (a2dp_audio_config_t*)param;
+//         mgr.audio_sample_rate_ = config->sample_rate;
+//         mgr.audio_channels_ = config->channels;
+//         ESP_LOGI(TAG, "Audio config: sample_rate=%d, channels=%d", mgr.audio_sample_rate_,
+//                  mgr.audio_channels_);
+//         break;
+//     }
+//     default:
+//         ESP_LOGD(TAG, "A2DP event: %d", event);
+//         break;
+// }
 // }
 
 // ============================================================================
@@ -222,8 +215,6 @@ void BluetoothManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
 }
 
 std::string BluetoothManager::OnToolGetStatus() {
-    
-
     cJSON* json = cJSON_CreateObject();
     cJSON_AddBoolToObject(json, "enabled", enabled_.load());
     cJSON_AddBoolToObject(json, "connected", connected_.load());

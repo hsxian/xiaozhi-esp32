@@ -80,9 +80,8 @@ std::string MusicHelper::ToJsonArray(std::vector<Music*>& musics) {
     return json_str;
 }
 
-
-std::vector<Music*> MusicHelper::Search(std::vector<Music*>& musics, const std::string& keyword, int page,
-                                  int page_size) {
+std::vector<Music*> MusicHelper::Search(std::vector<Music*>& musics, const std::string& keyword,
+                                        int page, int page_size) {
     // 简单的搜索实现，根据关键词和分页参数返回匹配的音乐
     std::vector<Music*> result;
     if (keyword.empty()) {
@@ -108,13 +107,14 @@ std::vector<Music*> MusicHelper::Search(std::vector<Music*>& musics, const std::
 }
 bool MusicHelper::Contains(std::vector<Music*>& musics, Music* music) {
     for (auto* m : musics) {
-        if (m->rid == music->rid||m->name == music->name) {
+        if (m->rid == music->rid || m->name == music->name) {
             return true;
         }
     }
     return false;
 }
-void MusicHelper::TryAdd(std::vector<Music*>& musics, std::vector<Music*>& new_musics, std::vector<Music*>& added_musics, std::vector<Music*>& failed_musics) {
+void MusicHelper::TryAdd(std::vector<Music*>& musics, std::vector<Music*>& new_musics,
+                         std::vector<Music*>& added_musics, std::vector<Music*>& failed_musics) {
     for (auto* music : new_musics) {
         if (Contains(musics, music)) {
             failed_musics.push_back(music);

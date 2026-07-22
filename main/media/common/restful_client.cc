@@ -69,7 +69,8 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
     }
     return ESP_OK;
 }
-esp_http_client_handle_t RestfulClient::CreateClient(const char* url, UserDataContext& dc, const std::map<std::string, std::string>& headers) {
+esp_http_client_handle_t RestfulClient::CreateClient(
+    const char* url, UserDataContext& dc, const std::map<std::string, std::string>& headers) {
     esp_http_client_config_t config = {
         .url = url,  // 可换成你的 API URL
         // .tls_version = ESP_HTTP_CLIENT_TLS_VER_TLS_1_2,
@@ -131,11 +132,10 @@ esp_err_t RestfulClient::PerformLoop(esp_http_client_handle_t client, UserDataCo
     ESP_LOGI(TAG, "%s response => %d bytes", log_tip, dc.data->size());
     return err;
 }
-std::string RestfulClient::Get(const std::string& url) {
-    return Get(url, {});
-}
+std::string RestfulClient::Get(const std::string& url) { return Get(url, {}); }
 
-std::string RestfulClient::Get(const std::string& url, const std::map<std::string, std::string>& headers) {
+std::string RestfulClient::Get(const std::string& url,
+                               const std::map<std::string, std::string>& headers) {
     auto url_str = url.c_str();
     std::string response;
     UserDataContext dc = {&response, UserDataType::Data};

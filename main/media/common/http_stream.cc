@@ -101,7 +101,6 @@ bool HttpStream::Open(const std::string& url, size_t resume_offset) {
     return true;
 }
 
-
 void HttpStream::StopRequest() {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -121,15 +120,16 @@ void HttpStream::OpenTask(void* arg) {
     ESP_LOGI(TAG, "OpenTask, url=%s", stream->url_str_.c_str());
     auto url_str = stream->url_str_.c_str();
 
-    esp_http_client_config_t config = {.url = url_str,
-                                       .timeout_ms = 10000,
-                                       .max_redirection_count = 5,
-                                       .event_handler = http_event_handler,
-                                       .buffer_size = 4096,
-                                       .buffer_size_tx = 4096,
-                                       .user_data = stream,
-                                       .crt_bundle_attach = esp_crt_bundle_attach,
-                                    };
+    esp_http_client_config_t config = {
+        .url = url_str,
+        .timeout_ms = 10000,
+        .max_redirection_count = 5,
+        .event_handler = http_event_handler,
+        .buffer_size = 4096,
+        .buffer_size_tx = 4096,
+        .user_data = stream,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
 
     stream->client_ = esp_http_client_init(&config);
     ESP_LOGI(TAG, "OpenTask, client=%p", stream->client_);
@@ -150,12 +150,11 @@ void HttpStream::OpenTask(void* arg) {
     // 如果有断点位置，设置 Range 请求头实现断点续传
     if (stream->resume_offset_ > 0) {
         char range_header[64];
-        snprintf(range_header, sizeof(range_header), "bytes=%lu-", (unsigned long)stream->resume_offset_);
+        snprintf(range_header, sizeof(range_header), "bytes=%lu-",
+                 (unsigned long)stream->resume_offset_);
         esp_http_client_set_header(client, "Range", range_header);
         ESP_LOGI(TAG, "Resuming download with Range header: %s", range_header);
     }
-
-
 
     ESP_LOGI(TAG, "OpenTask, perform request");
     esp_err_t err;
@@ -182,7 +181,7 @@ void HttpStream::OpenTask(void* arg) {
     }
     stream->task_handle_ = nullptr;
     // 任务自己结束时删除自己，StopRequest 会通过判断 task_handle_ 来决定是否需要删除
-    vTaskDelete(nullptr); 
+    vTaskDelete(nullptr);
 }
 
 void HttpStream::SendError() {

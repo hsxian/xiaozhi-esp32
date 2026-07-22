@@ -1,13 +1,13 @@
 #include "music_player.h"
+#include <cctype>
+#include "../lyrics.h"
+#include "../music.h"
+#include "../provider/music_resource.h"
 #include "application.h"
 #include "audio_codec.h"
 #include "board.h"
 #include "device_state.h"
 #include "display.h"
-#include <cctype>
-#include "../lyrics.h"
-#include "../music.h"
-#include "../provider/music_resource.h"
 #include "esp_aac_dec.h"
 #include "esp_audio_dec_reg.h"
 #include "esp_flac_dec.h"
@@ -431,7 +431,7 @@ void MusicPlayer::DecodePlayLoop(Music& music) {
                 if (decoder_type_ == ESP_AUDIO_SIMPLE_DEC_TYPE_NONE) {
                     // 如果URL也没有扩展名，尝试用数据检测
                     decoder_type_ = DetectAudioType((const uint8_t*)chunk.data, chunk.size);
-                } 
+                }
                 if (!OpenDecoder(decoder_type_)) {
                     ESP_LOGE(TAG, "Failed to initialize decoder");
                     delete[] chunk.data;
@@ -484,7 +484,8 @@ void MusicPlayer::DecodePlayLoop(Music& music) {
             DataChunk next_chunk;
             if (CanFitNextChunk(data_buffer, data_queue)) {
                 xQueueReceive(data_queue, &next_chunk, 0);
-                if (!ProcessReceivedChunk(next_chunk, data_buffer, track_complete_, track_error_, "Prefetched")) {
+                if (!ProcessReceivedChunk(next_chunk, data_buffer, track_complete_, track_error_,
+                                          "Prefetched")) {
                     break;
                 }
             }
@@ -560,7 +561,7 @@ void MusicPlayer::HandleResumeState(const std::string& url, RingBuffer& data_buf
         OpenDecoder(decoder_type_);
         http_stream_->Open(url, 0);
     } else {
-        fast_forward_to_ms_=0;
+        fast_forward_to_ms_ = 0;
         http_stream_->Open(url, http_stream_->GetDownloadBytesReceived());
     }
 }
@@ -677,7 +678,8 @@ bool MusicPlayer::DecodeAndPlayFrame(RingBuffer& data_buffer) {
                 int output_channels = info.channel;
 
                 // M4A 断点续播快进：跳过 PCM 转换，直接解码并推算时间位置
-                if (HandleFastForward(samples, info)) return true;
+                if (HandleFastForward(samples, info))
+                    return true;
 
                 ConvertPcmIfNeeded(info.sample_rate, info.channel, samples, output_samples,
                                    output_channels);
@@ -720,7 +722,8 @@ bool MusicPlayer::DecodeAndPlayFrame(RingBuffer& data_buffer) {
 }
 
 bool MusicPlayer::HandleFastForward(int samples, const esp_audio_simple_dec_info_t& info) {
-    if (fast_forward_to_ms_ <= 0) return false;
+    if (fast_forward_to_ms_ <= 0)
+        return false;
 
     if (current_position_ms_.load() < fast_forward_to_ms_) {
         int frames = samples / info.channel;
@@ -730,7 +733,8 @@ bool MusicPlayer::HandleFastForward(int samples, const esp_audio_simple_dec_info
         }
         if (total_duration_ms_.load() == 0 && info.bitrate > 0) {
             size_t cl = http_stream_->GetContentLength();
-            if (cl > 0) total_duration_ms_ = (int32_t)((uint64_t)cl * 8000 / info.bitrate);
+            if (cl > 0)
+                total_duration_ms_ = (int32_t)((uint64_t)cl * 8000 / info.bitrate);
         }
         static int ff_tick = 0;
         if (++ff_tick >= 50) {
@@ -848,8 +852,8 @@ void MusicPlayer::UpdateTimeInfo(int codec_output_rate, int output_samples, int 
 
 void MusicPlayer::OutputAudioWithFadeIn(int output_samples) {
     if (was_outputting_silence_) {
-        int fade_samples = audio_codec_->output_sample_rate() *
-                           audio_codec_->output_channels() * 5 / 1000;
+        int fade_samples =
+            audio_codec_->output_sample_rate() * audio_codec_->output_channels() * 5 / 1000;
         if (fade_samples > output_samples)
             fade_samples = output_samples;
         ApplyFadeIn(output_pcm_buffer_.data(), fade_samples);

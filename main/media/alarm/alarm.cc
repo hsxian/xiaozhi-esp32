@@ -1,19 +1,21 @@
 #include "alarm.h"
 #include <esp_log.h>
 #include <cJSON.h>
+#include <cstring>
 #include <format>
 #include <sstream>
-#include <cstring>
 
 #define TAG "Alarm"
 
 // repeat_days 位掩码 → 字符串 "0,1,2,3,4,5,6"
 std::string RepeatDaysToString(uint8_t repeat_days) {
-    if (repeat_days == 0) return "";
+    if (repeat_days == 0)
+        return "";
     std::string result;
     for (int i = 0; i < 7; i++) {
         if (repeat_days & (1 << i)) {
-            if (!result.empty()) result += ",";
+            if (!result.empty())
+                result += ",";
             result += std::to_string(i);
         }
     }
@@ -22,7 +24,8 @@ std::string RepeatDaysToString(uint8_t repeat_days) {
 
 // 字符串 "0,1,2,3,4,5,6" → repeat_days 位掩码
 uint8_t StringToRepeatDays(const std::string& str) {
-    if (str.empty()) return 0;
+    if (str.empty())
+        return 0;
     uint8_t result = 0;
     std::stringstream ss(str);
     std::string token;
@@ -162,7 +165,6 @@ std::vector<Alarm*> Alarm::findByName(std::vector<Alarm*>& alarms, const std::st
 }
 
 std::string Alarm::ToString() const {
-    
     std::string week = "";
     if (repeat_mode == RepeatMode::CUSTOM) {
         if (repeat_days == REPEAT_DAYS_EVERYDAY) {

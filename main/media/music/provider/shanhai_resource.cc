@@ -21,7 +21,7 @@ _Static_assert(sizeof(CONFIG_SHANHAI_RESOURCE_ADDRESS) > 1,
 
 bool ShanhaiResource::Search(const QueryBase& query, std::vector<Music*>& music_list) {
     RestfulClient restful_client;
-    
+
     std::string keyword = restful_client.UrlEncode(query.keyword);
     auto url = std::format("{}/?action=search&keyword={}&page={}&size={}&key={}",
                            CONFIG_SHANHAI_RESOURCE_ADDRESS, keyword, query.page, query.page_size,

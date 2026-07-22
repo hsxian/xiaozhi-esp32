@@ -1,16 +1,15 @@
 #pragma once
 
 #include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
 #include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 #include "alarm.h"
-#include <freertos/FreeRTOS.h>
 
 class McpTool;
 class Display;
-
 
 // 闹钟管理器类
 class AlarmManager {
@@ -64,7 +63,7 @@ public:
 
     // 检查闹钟在指定时间点是否应该响铃
     bool ShouldRingAtDate(const time_t& now, const Alarm& alarm) const;
-    Alarm* GetNextRingAtTime(const time_t& now,  int64_t& next_ring_time) const;
+    Alarm* GetNextRingAtTime(const time_t& now, int64_t& next_ring_time) const;
 
     // 加载节假日配置
     void LoadHolidays();

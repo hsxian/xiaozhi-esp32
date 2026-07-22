@@ -5,8 +5,8 @@
 #include <string>
 #include <vector>
 #include "../../common/query_base.h"
-#include "music_resource.h"
 #include "../lyrics.h"
+#include "music_resource.h"
 
 class CenguiguiResource : public MusicResource {
 public:
@@ -16,7 +16,7 @@ public:
     virtual std::string GetUrl(Music& music) override;
     virtual std::string GetLyricsUrl(Music& music) override;
     virtual void ParseLyricsFromJson(const std::string& json, Lyrics& lyrics) override;
-    
+
 private:
 };
 

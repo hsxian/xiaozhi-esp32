@@ -1,11 +1,10 @@
 #pragma once
 
 #include <esp_log.h>
+#include <string.h>
 #include <algorithm>
 #include <memory>
 #include <vector>
-#include <string.h>
-
 
 // 固定容量的环形缓冲区，避免动态增长导致内存分配失败
 // 数据始终保持连续，写入时若head_>0则自动compact

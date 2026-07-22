@@ -79,7 +79,7 @@ protected:
 
     bool HandlePauseState();
     void HandleResumeState(const std::string& url, RingBuffer& data_buffer);
-    
+
     void HandleBufferUnderrun(int silence_duration_ms = 80, int fade_duration_ms = 5);
     void FadeOutAndStop(int fade_duration_ms = 10);
     void OutputAudioWithFadeIn(int output_samples);

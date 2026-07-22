@@ -167,7 +167,7 @@ void Application::Initialize() {
 
     // Update the status bar immediately to show the network state
     display->UpdateStatusBar(true);
-    
+
 #if CONFIG_ENABLE_ALARM
     AlarmManager::GetInstance().Initialize();
 #endif
@@ -832,13 +832,11 @@ void Application::HandleWakeWordDetectedEvent() {
     }
 
     auto listeners = before_handle_wake_word_event_listener_.GetListeners();
-    for (auto &listener : listeners)
-    {
+    for (auto& listener : listeners) {
         if (listener && listener(nullptr)) {
             return;
         }
     }
-    
 
     auto state = GetDeviceState();
     auto wake_word = audio_service_.GetLastWakeWord();

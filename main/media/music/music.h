@@ -8,7 +8,7 @@ struct cJSON;
 struct Music {
 private:
 public:
-    std::string rid;             // 音乐ID
+    std::string rid;     // 音乐ID
     std::string pic;     // 封面图片URL
     std::string vid;     // 视频ID
     std::string name;    // 音乐名称
@@ -16,7 +16,7 @@ public:
     std::string album;   // 专辑名称
     std::string lrc;     // 歌词URL
     std::string url;     // 音乐URL
-    
+
     // 转换为JSON字符串
     std::string ToJson() const;
     void ToJson(cJSON* root) const;
@@ -32,7 +32,7 @@ public:
     std::string ToJsonArray(std::vector<Music*>& musics);
     void FromJsonArray(cJSON* array, std::vector<Music*>& musics);
     std::vector<Music*> Search(std::vector<Music*>& musics, const std::string& keyword,
-                                      int page = 1, int page_size = 10);
+                               int page = 1, int page_size = 10);
     bool Contains(std::vector<Music*>& musics, Music* music);
     void TryAdd(std::vector<Music*>& musics, std::vector<Music*>& new_musics,
                 std::vector<Music*>& added_musics, std::vector<Music*>& failed_musics);

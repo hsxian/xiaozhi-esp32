@@ -86,7 +86,8 @@ std::string LuoyueResource::GetUrl(Music& music) {
         RestfulClient restful_client;
         // 先获取歌曲信息（包含音质列表）
 
-        auto url = std::format("{}/music/tencent/song/link?mid={}&quality=8", CONFIG_LUOYUE_RESOURCE_ADDRESS, music.vid);
+        auto url = std::format("{}/music/tencent/song/link?mid={}&quality=8",
+                               CONFIG_LUOYUE_RESOURCE_ADDRESS, music.vid);
 
         ESP_LOGI(TAG, "url: %s", url.c_str());
         auto response = restful_client.Get(url);

@@ -14,6 +14,6 @@ public:
     void GenerateMcpServerTools(std::vector<McpTool*>& tools);
 
 private:
-    MiscManager()=default;
-    ~MiscManager()=default;
+    MiscManager() = default;
+    ~MiscManager() = default;
 };

@@ -50,53 +50,52 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
     tools.push_back(tool);
 
     // 搜索音乐，结果存入歌单
-    tool = new McpTool(
-        "self.music.search",
-        "a tool to search music from the internet and store results in the "
-        "playlist. Use self.music.playlist to view the playlist, then use "
-        "self.music.play to play a song by index. You must provide a keyword "
-        "to search, and you can also provide page number and page size for "
-        "pagination.",
-        PropertyList({Property("keyword", kPropertyTypeString),
-                      Property("page", kPropertyTypeInteger, 1),
-                      Property("pageSize", kPropertyTypeInteger, 10)}),
-        [this](const PropertyList& properties) -> ReturnValue {
-            QueryBase query;
-            query.keyword = properties["keyword"].value<std::string>();
-            query.page = properties["page"].value<int>();
-            query.page_size = properties["pageSize"].value<int>();
+    tool = new McpTool("self.music.search",
+                       "a tool to search music from the internet and store results in the "
+                       "playlist. Use self.music.playlist to view the playlist, then use "
+                       "self.music.play to play a song by index. You must provide a keyword to "
+                       "search, and you can also provide page number and page size for pagination.",
+                       PropertyList({Property("keyword", kPropertyTypeString),
+                                     Property("page", kPropertyTypeInteger, 1),
+                                     Property("pageSize", kPropertyTypeInteger, 10)}),
+                       [this](const PropertyList& properties) -> ReturnValue {
+                           QueryBase query;
+                           query.keyword = properties["keyword"].value<std::string>();
+                           query.page = properties["page"].value<int>();
+                           query.page_size = properties["pageSize"].value<int>();
 
-            auto resource = MusicResource::NewMusicResource();
-            std::vector<Music*> ms;
-            resource->Search(query, ms);
-            auto display = Board::GetInstance().GetDisplay();
-            display->SetChatMessage(
-                "music", std::format("Search music result count: %d", ms.size()).c_str());
-            if (ms.empty()) {
-                return "No music found";
-            }
-            MusicHelper music_helper;
-            std::vector<Music*> added_musics;
-            std::vector<Music*> failed_musics;
+                           auto resource = MusicResource::NewMusicResource();
+                           std::vector<Music*> ms;
+                           resource->Search(query, ms);
+                           auto display = Board::GetInstance().GetDisplay();
+                           display->SetChatMessage(
+                               "music",
+                               std::format("Search music result count: %d", ms.size()).c_str());
+                           if (ms.empty()) {
+                               return "No music found";
+                           }
+                           MusicHelper music_helper;
+                           std::vector<Music*> added_musics;
+                           std::vector<Music*> failed_musics;
 
-            music_helper.TryAdd(music_list_, ms, added_musics, failed_musics);
-            music_helper.Release(failed_musics);
-            cJSON* root = cJSON_CreateObject();
-            cJSON_AddNumberToObject(root, "added_count", added_musics.size());
-            cJSON_AddNumberToObject(root, "total_count", music_list_.size());
+                           music_helper.TryAdd(music_list_, ms, added_musics, failed_musics);
+                           music_helper.Release(failed_musics);
+                           cJSON* root = cJSON_CreateObject();
+                           cJSON_AddNumberToObject(root, "added_count", added_musics.size());
+                           cJSON_AddNumberToObject(root, "total_count", music_list_.size());
 
-            cJSON* songs_array = cJSON_CreateArray();
-            for (auto* music : added_musics) {
-                cJSON* song_obj = cJSON_CreateObject();
-                music->ToJsonSimple(song_obj);
-                cJSON_AddItemToArray(songs_array, song_obj);
-            }
-            cJSON_AddItemToObject(root, "songs", songs_array);
+                           cJSON* songs_array = cJSON_CreateArray();
+                           for (auto* music : added_musics) {
+                               cJSON* song_obj = cJSON_CreateObject();
+                               music->ToJsonSimple(song_obj);
+                               cJSON_AddItemToArray(songs_array, song_obj);
+                           }
+                           cJSON_AddItemToObject(root, "songs", songs_array);
 
-            auto json_str = cJSON_Print(root);
-            cJSON_Delete(root);
-            return json_str;
-        });
+                           auto json_str = cJSON_Print(root);
+                           cJSON_Delete(root);
+                           return json_str;
+                       });
     tools.push_back(tool);
 
     // 获取收藏音乐
@@ -245,28 +244,27 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
     tools.push_back(tool);
 
     // 播放状态查询
-    tool = new McpTool("self.music.status", "a tool to get music status.", PropertyList(),
-                       [this](const PropertyList& properties) -> ReturnValue {
-                           if (!music_player_) {
-                               return "No music player initialized,user use self.music.search and "
-                                      "self.music.play to play";
-                           }
-                           switch (music_player_->GetPlayState()) {
-                               case MusicPlayer::PlayState::kPlaying:
-                                   return "playing";
-                               case MusicPlayer::PlayState::kPaused:
-                                   return "paused, use self.music.control with controlMode=3 to resume";
-                               case MusicPlayer::PlayState::kResuming:
-                                   return "resuming, please wait";
-                               case MusicPlayer::PlayState::kIdle:
-                                   return "idle, use self.music.play to play";
-                               default:
-                                   return "unknown";
-                           }
-                       });
+    tool = new McpTool(
+        "self.music.status", "a tool to get music status.", PropertyList(),
+        [this](const PropertyList& properties) -> ReturnValue {
+            if (!music_player_) {
+                return "No music player initialized,user use self.music.search and "
+                       "self.music.play to play";
+            }
+            switch (music_player_->GetPlayState()) {
+                case MusicPlayer::PlayState::kPlaying:
+                    return "playing";
+                case MusicPlayer::PlayState::kPaused:
+                    return "paused, use self.music.control with controlMode=3 to resume";
+                case MusicPlayer::PlayState::kResuming:
+                    return "resuming, please wait";
+                case MusicPlayer::PlayState::kIdle:
+                    return "idle, use self.music.play to play";
+                default:
+                    return "unknown";
+            }
+        });
     tools.push_back(tool);
 }
 
-void MusicManager::TryResleaseMusicPlayer() {
-    music_player_.reset();
-}
+void MusicManager::TryResleaseMusicPlayer() { music_player_.reset(); }

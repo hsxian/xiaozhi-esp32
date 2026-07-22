@@ -754,11 +754,12 @@ void AlarmManager::RingingTask(void* data) {
     // ？？后自动停止响铃
     int ringing_seconds = 60 * 3;
     stop_ringing_signal_ = false;
+    int loop_count = 0;
     
     while (time_diff < ringing_seconds && !stop_ringing_signal_) {
         auto vol = start_volume + 2 * time_diff * (alarm_volume - start_volume) / ringing_seconds;
         vol = std::min(vol, (int)alarm_volume);
-        if (time_diff % 3 == 0 && vol != audio_codec->output_volume()) {
+        if (loop_count % 3 == 0 && vol != audio_codec->output_volume()) {
             audio_codec->SetOutputVolume(vol);
         }
 
@@ -770,6 +771,7 @@ void AlarmManager::RingingTask(void* data) {
         audio_service.UpdateLastOutputTime();
         now = time(nullptr);
         time_diff = difftime(now, old_now);
+        loop_count++;
     }
     //自己停止自己，不能直接调用StopAlarmRinging，因为它会删除当前任务，导致后续代码无法执行
     ringing_task_handle_ = nullptr;

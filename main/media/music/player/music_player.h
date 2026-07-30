@@ -140,6 +140,7 @@ protected:
     // 解码状态
     bool track_complete_{false};
     bool track_error_{false};
+    size_t total_decoded_bytes_{0};  // 当前歌曲解码的总字节数，用于断点续播
 
     // 统一解码器
     esp_audio_simple_dec_handle_t decoder_{nullptr};

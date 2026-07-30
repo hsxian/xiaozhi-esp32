@@ -170,6 +170,7 @@ bool MusicPlayer::ChangePlayControlMode(const PlayControlMode& mode) {
     switch (mode) {
         case PlayControlMode::kPause:
             http_stream_->StopRequest();
+            http_stream_->CleanDataQueue();
             play_state_ = PlayState::kPausing;
             break;
 
@@ -402,9 +403,11 @@ void MusicPlayer::DecodePlayLoop(Music& music) {
             recv_timeout = pdMS_TO_TICKS(5000);
         } else if (CanFitNextChunk(data_buffer, data_queue)) {
             recv_timeout = pdMS_TO_TICKS(0);
-        } else if (uxQueueMessagesWaiting(data_queue) > 0) {
-            recv_timeout = pdMS_TO_TICKS(0);
-        } else {
+        }
+        // else if (uxQueueMessagesWaiting(data_queue) > 0) {
+        //     recv_timeout = pdMS_TO_TICKS(0);
+        // }
+        else {
             recv_timeout =
                 (data_buffer.size() < min_decode_size) ? pdMS_TO_TICKS(60) : pdMS_TO_TICKS(500);
         }
@@ -525,13 +528,10 @@ void MusicPlayer::HandleResumeState(const std::string& url, RingBuffer& data_buf
     current_control_mode_ = PlayControlMode::kControlHandled;
     PreparePlayState();
 
-    // 使用已下载的字节数作为断点续传偏移量，跳过已接收的数据
-    auto resume_offset = (size_t)http_stream_->GetDownloadBytesReceived();
-    if (decoder_type_ != ESP_AUDIO_SIMPLE_DEC_TYPE_M4A) {
-        resume_offset = 0;
-    }
+    // 清空环形缓冲区和下载队列：旧数据会通过 HTTP Range 从断点重新下发
+    data_buffer.clear();
     // 重新打开 HTTP 流，从断点处开始下载
-    http_stream_->Open(url, resume_offset);
+    http_stream_->Open(url, total_decoded_bytes_);
 }
 
 // =============================================================================
@@ -632,6 +632,7 @@ bool MusicPlayer::DecodeAndPlayFrame(RingBuffer& data_buffer) {
 
     esp_audio_err_t ret = esp_audio_simple_dec_process(decoder_, &raw, &out_frame);
     data_buffer.consume(raw.consumed);
+    total_decoded_bytes_ += raw.consumed;
 
     if (ret == ESP_AUDIO_ERR_OK) {
         if (out_frame.decoded_size > 0) {
@@ -885,5 +886,6 @@ void MusicPlayer::ResetPlaybackProgress() {
     current_position_ms_ = 0;
     total_duration_ms_ = 0;
     decoder_type_ = ESP_AUDIO_SIMPLE_DEC_TYPE_NONE;
+    total_decoded_bytes_ = 0;
     ESP_LOGD(TAG, "Playback progress reset");
 }

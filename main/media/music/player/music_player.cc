@@ -23,18 +23,6 @@
 
 #define TAG "MusicPlayer"
 
-inline void ApplyFadeIn(int16_t* buffer, int fade_samples) {
-    for (int i = 0; i < fade_samples; i++) {
-        buffer[i] = (int16_t)((int32_t)buffer[i] * ((i << 8) / fade_samples) >> 8);
-    }
-}
-
-inline void ApplyFadeOut(int16_t* buffer, int fade_samples) {
-    for (int i = 0; i < fade_samples; i++) {
-        buffer[i] = (int16_t)((int32_t)buffer[i] * (((fade_samples - i) << 8) / fade_samples) >> 8);
-    }
-}
-
 // =============================================================================
 // 静态工具函数
 // =============================================================================
@@ -182,7 +170,6 @@ bool MusicPlayer::ChangePlayControlMode(const PlayControlMode& mode) {
     switch (mode) {
         case PlayControlMode::kPause:
             http_stream_->StopRequest();
-            http_stream_->CleanDataQueue();
             play_state_ = PlayState::kPausing;
             break;
 
@@ -423,8 +410,6 @@ void MusicPlayer::DecodePlayLoop(Music& music) {
         }
         BaseType_t recv_result = xQueueReceive(data_queue, &chunk, recv_timeout);
         if (recv_result == pdPASS) {
-            was_outputting_silence_ = false;
-
             // 如果解码器还没打开，先用收到的数据检测格式
             if (!decoder_) {
                 // 恢复播放时，数据可能不是从帧边界开始的，直接用URL扩展名检测
@@ -453,7 +438,7 @@ void MusicPlayer::DecodePlayLoop(Music& music) {
             }
             audio_service.UpdateLastOutputTime();
             if (data_buffer.size() < min_decode_size) {
-                HandleBufferUnderrun(80, 5);
+                HandleBufferUnderrun(80);
                 continue;
             }
         }
@@ -463,8 +448,6 @@ void MusicPlayer::DecodePlayLoop(Music& music) {
             audio_codec_->EnableOutput(true);
         }
 
-        bool ff_active = (fast_forward_to_ms_ > 0);
-        int ff_frame_count = 0;
         while (data_buffer.size() >= min_decode_size && play_state_ == PlayState::kPlaying) {
             if (!DecodeAndPlayFrame(data_buffer)) {
                 ESP_LOGW(TAG, "Decode failed, skipping");
@@ -472,14 +455,7 @@ void MusicPlayer::DecodePlayLoop(Music& music) {
                 break;
             }
 
-            if (ff_active) {
-                if (++ff_frame_count >= 50) {
-                    taskYIELD();
-                    ff_frame_count = 0;
-                }
-            } else {
-                vTaskDelay(1);
-            }
+            // taskYIELD();
 
             DataChunk next_chunk;
             if (CanFitNextChunk(data_buffer, data_queue)) {
@@ -500,7 +476,6 @@ void MusicPlayer::DecodePlayLoop(Music& music) {
         }
     }
 
-    FadeOutAndStop(10);
     CloseDecoder();
     audio_codec_->EnableOutput(false);
     http_stream_->CleanDataQueue();
@@ -550,20 +525,13 @@ void MusicPlayer::HandleResumeState(const std::string& url, RingBuffer& data_buf
     current_control_mode_ = PlayControlMode::kControlHandled;
     PreparePlayState();
 
-    // M4A/MP4 是容器格式，不能从任意字节偏移恢复，必须从头开始
-    if (decoder_type_ == ESP_AUDIO_SIMPLE_DEC_TYPE_M4A) {
-        ESP_LOGI(TAG, "M4A/MP4 detected, resuming from beginning (no range request)");
-        fast_forward_to_ms_ = current_position_ms_.load();
-        current_position_ms_ = 0;
-        CloseDecoder();
-        http_stream_->CleanDataQueue();
-        data_buffer.clear();
-        OpenDecoder(decoder_type_);
-        http_stream_->Open(url, 0);
-    } else {
-        fast_forward_to_ms_ = 0;
-        http_stream_->Open(url, http_stream_->GetDownloadBytesReceived());
+    // 使用已下载的字节数作为断点续传偏移量，跳过已接收的数据
+    auto resume_offset = (size_t)http_stream_->GetDownloadBytesReceived();
+    if (decoder_type_ != ESP_AUDIO_SIMPLE_DEC_TYPE_M4A) {
+        resume_offset = 0;
     }
+    // 重新打开 HTTP 流，从断点处开始下载
+    http_stream_->Open(url, resume_offset);
 }
 
 // =============================================================================
@@ -633,7 +601,6 @@ bool MusicPlayer::OpenDecoder(esp_audio_simple_dec_type_t type) {
         return false;
     }
 
-    consecutive_skip_count_ = 0;
     ESP_LOGI(TAG, "Decoder opened for type %d", (int)type);
     return true;
 }
@@ -668,7 +635,6 @@ bool MusicPlayer::DecodeAndPlayFrame(RingBuffer& data_buffer) {
 
     if (ret == ESP_AUDIO_ERR_OK) {
         if (out_frame.decoded_size > 0) {
-            consecutive_skip_count_ = 0;
             int samples = out_frame.decoded_size / sizeof(int16_t);
 
             esp_audio_simple_dec_info_t info;
@@ -677,10 +643,6 @@ bool MusicPlayer::DecodeAndPlayFrame(RingBuffer& data_buffer) {
                 int output_samples = samples;
                 int output_channels = info.channel;
 
-                // M4A 断点续播快进：跳过 PCM 转换，直接解码并推算时间位置
-                if (HandleFastForward(samples, info))
-                    return true;
-
                 ConvertPcmIfNeeded(info.sample_rate, info.channel, samples, output_samples,
                                    output_channels);
                 UpdateTimeInfo(codec_output_rate, output_samples, output_channels, info.bitrate);
@@ -688,7 +650,7 @@ bool MusicPlayer::DecodeAndPlayFrame(RingBuffer& data_buffer) {
                 ShowLyrics();
 
                 if (output_samples > 0 && play_state_ == PlayState::kPlaying) {
-                    OutputAudioWithFadeIn(output_samples);
+                    OutputAudio(output_samples);
                 }
             }
         }
@@ -719,34 +681,6 @@ bool MusicPlayer::DecodeAndPlayFrame(RingBuffer& data_buffer) {
         }
         return true;
     }
-}
-
-bool MusicPlayer::HandleFastForward(int samples, const esp_audio_simple_dec_info_t& info) {
-    if (fast_forward_to_ms_ <= 0)
-        return false;
-
-    if (current_position_ms_.load() < fast_forward_to_ms_) {
-        int frames = samples / info.channel;
-        if (frames > 0 && info.sample_rate > 0) {
-            int32_t delta_ms = (int32_t)((int64_t)frames * 1000 / info.sample_rate);
-            current_position_ms_.fetch_add(delta_ms);
-        }
-        if (total_duration_ms_.load() == 0 && info.bitrate > 0) {
-            size_t cl = http_stream_->GetContentLength();
-            if (cl > 0)
-                total_duration_ms_ = (int32_t)((uint64_t)cl * 8000 / info.bitrate);
-        }
-        static int ff_tick = 0;
-        if (++ff_tick >= 50) {
-            Application::GetInstance().GetAudioService().UpdateLastOutputTime();
-            ff_tick = 0;
-        }
-        return true;
-    }
-
-    ESP_LOGI(TAG, "Fast-forward complete, reached %ld ms", (long)fast_forward_to_ms_);
-    fast_forward_to_ms_ = 0;
-    return false;
 }
 
 // =============================================================================
@@ -850,62 +784,20 @@ void MusicPlayer::UpdateTimeInfo(int codec_output_rate, int output_samples, int 
 // 音频输出
 // =============================================================================
 
-void MusicPlayer::OutputAudioWithFadeIn(int output_samples) {
-    if (was_outputting_silence_) {
-        int fade_samples =
-            audio_codec_->output_sample_rate() * audio_codec_->output_channels() * 5 / 1000;
-        if (fade_samples > output_samples)
-            fade_samples = output_samples;
-        ApplyFadeIn(output_pcm_buffer_.data(), fade_samples);
-    }
-
+void MusicPlayer::OutputAudio(int output_samples) {
     audio_codec_->OutputData(output_pcm_buffer_.data(), output_samples);
-    was_outputting_silence_ = false;
     Application::GetInstance().GetAudioService().UpdateLastOutputTime();
 }
 
-void MusicPlayer::HandleBufferUnderrun(int silence_duration_ms, int fade_duration_ms) {
+void MusicPlayer::HandleBufferUnderrun(int silence_duration_ms) {
     int silence_samples = audio_codec_->output_sample_rate() * audio_codec_->output_channels() *
                           silence_duration_ms / 1000;
     if (silence_samples <= 0 || silence_samples > (int)output_pcm_buffer_.size()) {
         return;
     }
 
-    if (!was_outputting_silence_ && output_pcm_buffer_.size() > 0) {
-        int valid = std::min((int)output_pcm_buffer_.size(), silence_samples);
-        int fade_samples = audio_codec_->output_sample_rate() * audio_codec_->output_channels() *
-                           fade_duration_ms / 1000;
-        if (fade_samples > valid)
-            fade_samples = valid;
-        ApplyFadeOut(output_pcm_buffer_.data(), fade_samples);
-        int remaining = silence_samples - fade_samples;
-        if (remaining > 0) {
-            memset(output_pcm_buffer_.data() + fade_samples, 0, remaining * sizeof(int16_t));
-        }
-    } else {
-        memset(output_pcm_buffer_.data(), 0, silence_samples * sizeof(int16_t));
-    }
+    memset(output_pcm_buffer_.data(), 0, silence_samples * sizeof(int16_t));
     audio_codec_->OutputData(output_pcm_buffer_.data(), silence_samples);
-    was_outputting_silence_ = true;
-}
-
-void MusicPlayer::FadeOutAndStop(int fade_duration_ms) {
-    if (was_outputting_silence_ || output_pcm_buffer_.size() == 0) {
-        return;
-    }
-
-    int fade_samples = audio_codec_->output_sample_rate() * audio_codec_->output_channels() *
-                       fade_duration_ms / 1000;
-    if (fade_samples > (int)output_pcm_buffer_.size()) {
-        fade_samples = (int)output_pcm_buffer_.size();
-    }
-    if (fade_samples <= 0) {
-        return;
-    }
-
-    ApplyFadeOut(output_pcm_buffer_.data(), fade_samples);
-    audio_codec_->OutputData(output_pcm_buffer_.data(), fade_samples);
-    vTaskDelay(pdMS_TO_TICKS(fade_duration_ms + 5));
 }
 
 // =============================================================================
@@ -991,7 +883,6 @@ bool MusicPlayer::OnWakeWordDetected(void* data) {
 
 void MusicPlayer::ResetPlaybackProgress() {
     current_position_ms_ = 0;
-    fast_forward_to_ms_ = 0;
     total_duration_ms_ = 0;
     decoder_type_ = ESP_AUDIO_SIMPLE_DEC_TYPE_NONE;
     ESP_LOGD(TAG, "Playback progress reset");

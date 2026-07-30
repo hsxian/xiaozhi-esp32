@@ -99,7 +99,7 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                                 Property("second", kPropertyTypeInteger, 0, 59),
                                 Property("volume", kPropertyTypeInteger, 90, 0, 100),
                                 Property("repeat_mode", kPropertyTypeInteger, 0, 4),
-                                Property("repeat_days", kPropertyTypeString, "1,2,3,4,5")});
+                                Property("repeat_days", kPropertyTypeString)});
 
     auto tool = new McpTool(
         "self.alarm_clock.add",

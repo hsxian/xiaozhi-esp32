@@ -15,6 +15,7 @@ HttpStream::HttpStream() {
 
 HttpStream::~HttpStream() {
     StopRequest();
+    CleanDataQueue();
     if (data_queue_) {
         vQueueDelete(data_queue_);
         data_queue_ = nullptr;
@@ -92,8 +93,9 @@ bool HttpStream::Open(const std::string& url, size_t resume_offset) {
     url_str_ = url;
     download_bytes_received_ = resume_offset;
     resume_offset_ = resume_offset;
-
     StopRequest();
+
+    should_stop_ = false;
 
     ESP_LOGI(TAG, "start OpenTask request => %s", url.c_str());
     xTaskCreate(OpenTask, "OpenTask", 8192, this, 2, &task_handle_);
@@ -104,14 +106,26 @@ void HttpStream::StopRequest() {
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (task_handle_ != nullptr) {
-        vTaskDelete(task_handle_);
-        task_handle_ = nullptr;
+        should_stop_ = true;
+
+        if (client_ != nullptr) {
+            esp_http_client_close(client_);
+        }
+
+        TickType_t wait_start = xTaskGetTickCount();
+        while (task_handle_ != nullptr) {
+            TickType_t elapsed = xTaskGetTickCount() - wait_start;
+            if (elapsed >= pdMS_TO_TICKS(3000)) {
+                ESP_LOGW(TAG, "Task did not exit gracefully within 3s, force deleting");
+                vTaskDelete(task_handle_);
+                task_handle_ = nullptr;
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
     }
 
     CleanClient();
-
-    // 清理队列中的所有数据块，释放分配的内存
-    CleanDataQueue();
 }
 
 void HttpStream::OpenTask(void* arg) {
@@ -133,6 +147,8 @@ void HttpStream::OpenTask(void* arg) {
     stream->client_ = esp_http_client_init(&config);
     ESP_LOGI(TAG, "OpenTask, client=%p", stream->client_);
     if (stream->client_ == nullptr) {
+        stream->task_handle_ = nullptr;
+        vTaskDelete(nullptr);
         return;
     }
     auto client = stream->client_;
@@ -156,8 +172,13 @@ void HttpStream::OpenTask(void* arg) {
     }
 
     ESP_LOGI(TAG, "OpenTask, perform request");
-    esp_err_t err;
+    esp_err_t err = ESP_FAIL;
     for (int attempt = 0; attempt < 6; attempt++) {
+        if (stream->should_stop_) {
+            ESP_LOGI(TAG, "OpenTask stopped by request");
+            break;
+        }
+
         stream->content_length_ = 0;
         err = esp_http_client_perform(client);
         if (err == ESP_OK)
@@ -170,16 +191,20 @@ void HttpStream::OpenTask(void* arg) {
         break;
     }
 
-    ESP_LOGI(TAG, "OpenTask, perform request err=%d", err);
-    if (err == ESP_OK) {
-        stream->SendEos();
-        ESP_LOGI(TAG, "HTTP GET Status = %d", esp_http_client_get_status_code(client));
+    if (!stream->should_stop_) {
+        ESP_LOGI(TAG, "OpenTask, perform request err=%d", err);
+        if (err == ESP_OK) {
+            stream->SendEos();
+            ESP_LOGI(TAG, "HTTP GET Status = %d", esp_http_client_get_status_code(client));
+        } else {
+            stream->SendError();
+            ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
+        }
     } else {
-        stream->SendError();
-        ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
+        ESP_LOGI(TAG, "OpenTask exiting due to stop request");
     }
+
     stream->task_handle_ = nullptr;
-    // 任务自己结束时删除自己，StopRequest 会通过判断 task_handle_ 来决定是否需要删除
     vTaskDelete(nullptr);
 }
 
@@ -211,7 +236,8 @@ void HttpStream::SendData(DataChunk chunk) {
         ESP_LOGW(TAG, "Queue full after %dms wait, blocking until space available",
                  timeout / portTICK_PERIOD_MS);
         // 使用 portMAX_DELAY 无限等待，直到队列有空间
-        if (xQueueSend(data_queue_, &chunk, portMAX_DELAY) != pdPASS) {
+        send_result = xQueueSend(data_queue_, &chunk, portMAX_DELAY);
+        if (send_result != pdPASS) {
             // 理论上不会到达这里，除非队列被删除
             ESP_LOGE(TAG, "Failed to send chunk even with infinite wait!");
             delete[] chunk.data;

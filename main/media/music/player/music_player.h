@@ -80,15 +80,13 @@ protected:
     bool HandlePauseState();
     void HandleResumeState(const std::string& url, RingBuffer& data_buffer);
 
-    void HandleBufferUnderrun(int silence_duration_ms = 80, int fade_duration_ms = 5);
-    void FadeOutAndStop(int fade_duration_ms = 10);
-    void OutputAudioWithFadeIn(int output_samples);
+    void HandleBufferUnderrun(int silence_duration_ms = 80);
+    void OutputAudio(int output_samples);
 
     // 解码器钩子
     bool OpenDecoder(esp_audio_simple_dec_type_t type);
     void CloseDecoder();
     bool DecodeAndPlayFrame(RingBuffer& buffer);
-    bool HandleFastForward(int samples, const esp_audio_simple_dec_info_t& info);
 
     // PCM 转换与时间更新
     void ConvertPcmIfNeeded(int input_rate, int input_channels, int input_samples,
@@ -146,16 +144,12 @@ protected:
     // 统一解码器
     esp_audio_simple_dec_handle_t decoder_{nullptr};
     esp_audio_simple_dec_type_t decoder_type_{ESP_AUDIO_SIMPLE_DEC_TYPE_NONE};
-    int32_t fast_forward_to_ms_{0};  // M4A 断点续播快进目标时间，0 表示不需要快进
     static constexpr int MAX_CONSECUTIVE_SKIPS = 100;
     int consecutive_skip_count_{0};
 
     // 预分配的PCM输出缓冲区
     static constexpr int MAX_PCM_OUTPUT_SAMPLES = 8192;
     std::vector<int16_t> output_pcm_buffer_;
-
-    // 静音状态追踪
-    bool was_outputting_silence_ = false;
 
     // 队列水位常量
     static constexpr int QUEUE_SIZE = 16;

@@ -49,6 +49,7 @@ private:
 
     std::string url_str_;
     TaskHandle_t task_handle_{nullptr};
+    std::atomic<bool> should_stop_{false};
     QueueHandle_t data_queue_;  // MP3数据队列
     int64_t content_length_{0};
     size_t download_bytes_received_{0};

@@ -124,6 +124,9 @@ MusicPlayer::~MusicPlayer() {
     Application::GetInstance().BeforeHandleToggleChatEventListener().RemoveEventListener(
         toggle_chat_listener_id_);
     CleanupResources();
+    CloseDecoder();
+    MusicHelper helper;
+    helper.Release(current_music_list_);
     delete lyrics_;
     lyrics_ = nullptr;
     delete http_stream_;
@@ -135,19 +138,41 @@ MusicPlayer::~MusicPlayer() {
 // =============================================================================
 
 bool MusicPlayer::Play(Music* music, LoopMode mode) {
-    std::vector<Music*> music_list = {music};
-    Play(music_list, mode);
-    return true;
-}
-
-void MusicPlayer::Play(const std::vector<Music*>& music_list, LoopMode mode) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (IsPlaying()) {
-        ESP_LOGW(TAG, "Already playing, stop current first");
+        ESP_LOGW(TAG, "Already playing");
+        return false;
+    }
+
+    // 清空歌单，只放这一首歌
+    MusicHelper helper;
+    helper.Release(current_music_list_);
+    current_music_list_.push_back(music);
+
+    current_control_mode_ = PlayControlMode::kUnknown;
+    play_state_ = PlayState::kPlaying;
+    current_track_index_ = 0;
+    loop_mode_ = mode;
+
+    xTaskCreate(PlayMusicTask, "music_decode_task", 8192, this, 2, &decode_task_handle_);
+
+    ESP_LOGI(TAG, "Started playing 1 track, loop mode: %d", mode);
+    return true;
+}
+
+void MusicPlayer::Play(LoopMode mode) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (IsPlaying()) {
+        ESP_LOGW(TAG, "Already playing");
         return;
     }
-    current_music_list_ = music_list;
+    if (current_music_list_.empty()) {
+        ESP_LOGW(TAG, "Playlist is empty");
+        return;
+    }
+
     current_control_mode_ = PlayControlMode::kUnknown;
     play_state_ = PlayState::kPlaying;
     current_track_index_ = 0;
@@ -156,6 +181,21 @@ void MusicPlayer::Play(const std::vector<Music*>& music_list, LoopMode mode) {
     xTaskCreate(PlayMusicTask, "music_decode_task", 8192, this, 2, &decode_task_handle_);
 
     ESP_LOGI(TAG, "Started playing %d tracks, loop mode: %d", current_music_list_.size(), mode);
+}
+
+int MusicPlayer::AddToPlaylist(std::vector<Music*>& ms, std::vector<Music*>* added_musics) {
+    if (ms.empty()) {
+        return 0;
+    }
+    MusicHelper music_helper;
+    std::vector<Music*> added;
+    std::vector<Music*> failed_musics;
+    music_helper.TryAdd(current_music_list_, ms, added, failed_musics);
+    music_helper.Release(failed_musics);
+    if (added_musics) {
+        *added_musics = std::move(added);
+    }
+    return (int)added.size();
 }
 
 bool MusicPlayer::ChangePlayControlMode(const PlayControlMode& mode) {
@@ -232,17 +272,26 @@ void MusicPlayer::PlayMusicLoop() {
     current_control_mode_ = PlayControlMode::kControlHandled;
 
     auto loop_mode = loop_mode_;
-    int playlist_size = static_cast<int>(current_music_list_.size());
-
+    int playlist_size = 0;
     std::vector<int> shuffle_order;
-    if (loop_mode == LoopMode::kShuffle && playlist_size > 0) {
-        shuffle_order.resize(playlist_size);
-        for (int i = 0; i < playlist_size; i++)
-            shuffle_order[i] = i;
-        ShuffleArray(shuffle_order, playlist_size);
-    }
 
     while (play_state_ != PlayState::kIdle) {
+        // 每次循环都检查播放列表是否有更新（暂停期间可能添加了新歌曲）
+        int new_playlist_size = static_cast<int>(current_music_list_.size());
+        if (new_playlist_size != playlist_size) {
+            ESP_LOGI(TAG, "Playlist size changed from %d to %d", playlist_size, new_playlist_size);
+            playlist_size = new_playlist_size;
+            if (loop_mode == LoopMode::kShuffle && playlist_size > 0) {
+                ShuffleArray(shuffle_order, playlist_size);
+                ESP_LOGI(TAG, "Reshuffled playlist with new size");
+            }
+            CloseDecoder();
+            if (current_track_index_ >= playlist_size) {
+                current_track_index_ = 0;
+            }
+            ResetPlaybackProgress();
+        }
+
         if (current_track_index_ < 0 || current_track_index_ >= playlist_size) {
             if (loop_mode == LoopMode::kPlayOnce) {
                 ESP_LOGI(TAG, "No more tracks to play (play once mode)");
@@ -848,6 +897,9 @@ void MusicPlayer::ShowLyrics() {
 }
 
 void MusicPlayer::ShuffleArray(std::vector<int>& arr, int size) {
+    arr.resize(size);
+    for (int i = 0; i < size; i++)
+        arr[i] = i;
     for (int i = size - 1; i > 0; i--) {
         int j = esp_random() % (i + 1);
         std::swap(arr[i], arr[j]);

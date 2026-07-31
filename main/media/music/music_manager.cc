@@ -67,13 +67,15 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                                "music",
                                std::format("Search music result count: {}", ms.size()).c_str());
                            std::vector<Music*> added_musics;
-                           auto added_count = AddMusicToPlaylist(ms, &added_musics);
+                           EnsureMusicPlayer();
+                           auto added_count = music_player_->AddToPlaylist(ms, &added_musics);
                            if (added_count == 0) {
                                return "No music found";
                            }
                            cJSON* root = cJSON_CreateObject();
                            cJSON_AddNumberToObject(root, "added_count", added_count);
-                           cJSON_AddNumberToObject(root, "total_count", music_list_.size());
+                           cJSON_AddNumberToObject(root, "total_count",
+                                                   music_player_->GetPlaylist().size());
 
                            cJSON* songs_array = cJSON_CreateArray();
                            for (auto* music : added_musics) {
@@ -94,18 +96,22 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         "self.music.favorite",
         "a tool to get favorite songs from the music resource. "
         "You can specify the number of favorite songs to retrieve, "
-        "and it will store the songs in the playlist, then return count of the favorite songs.",
+        "and it will store the songs in the playlist, then return count of the favorite songs. "
+        "IMPORTANT: Only call this tool once at a time, do NOT call it again before the previous "
+        "call returns.",
         PropertyList({Property("count", kPropertyTypeInteger, 100)}),
         [this](const PropertyList& properties) -> ReturnValue {
             auto count = properties["count"].value<int>();
             auto resource = MusicResource::NewMusicResource();
             std::vector<Music*> ms;
             resource->GetFavoriteSongs(count, ms);
-            auto added_count = AddMusicToPlaylist(ms);
+            EnsureMusicPlayer();
+            auto added_count = music_player_->AddToPlaylist(ms);
             if (added_count == 0) {
                 return "No favorite songs found";
             }
-            return std::format("Favorite songs count: {}", added_count);
+            return std::format("Add new songs count: {}, total playlist count: {}", added_count,
+                               music_player_->GetPlaylist().size());
         });
     tools.push_back(tool);
 
@@ -117,19 +123,16 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         "loopMode: 0=play once, 1=loop, 2=shuffle (default 0).",
         PropertyList({Property("loopMode", kPropertyTypeInteger, 0, 0, 2)}),
         [this](const PropertyList& properties) -> ReturnValue {
-            if (music_list_.empty()) {
+            if (music_player_ == nullptr || music_player_->GetPlaylist().empty()) {
                 return "Playlist is empty, please search music first";
             }
-            if (music_player_ && music_player_->IsPlaying()) {
+            if (music_player_->IsPlaying()) {
                 return "Music is already playing, please use self.music.control to resume it";
-            }
-            if (music_player_ == nullptr) {
-                music_player_ = MusicPlayer::NewMusicPlayer();
             }
 
             auto loop_mode =
                 static_cast<MusicPlayer::LoopMode>(properties["loopMode"].value<int>());
-            music_player_->Play(music_list_, loop_mode);
+            music_player_->Play(loop_mode);
             const char* mode_names[] = {"play once", "loop", "shuffle"};
             return std::format("Music playback started ({})", mode_names[(int)loop_mode]);
         });
@@ -144,7 +147,7 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                                      Property("page", kPropertyTypeInteger, 1),
                                      Property("pageSize", kPropertyTypeInteger, 10)}),
                        [this](const PropertyList& properties) -> ReturnValue {
-                           if (music_list_.empty()) {
+                           if (music_player_ == nullptr || music_player_->GetPlaylist().empty()) {
                                return "Playlist is empty";
                            }
                            auto keyword = properties["keyword"].value<std::string>();
@@ -152,7 +155,8 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                            auto page_size = properties["pageSize"].value<int>();
 
                            MusicHelper music_helper;
-                           auto result = music_helper.Search(music_list_, keyword, page, page_size);
+                           auto& playlist = music_player_->GetPlaylist();
+                           auto result = music_helper.Search(playlist, keyword, page, page_size);
                            if (result.empty()) {
                                return std::format("No music matching '{}'", keyword);
                            }
@@ -166,18 +170,19 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                        "Leave keyword empty to return all songs.",
                        PropertyList({Property("keyword", kPropertyTypeString, "")}),
                        [this](const PropertyList& properties) -> ReturnValue {
-                           if (music_list_.empty()) {
+                           if (music_player_ == nullptr || music_player_->GetPlaylist().empty()) {
                                return "Playlist is empty";
                            }
                            auto keyword = properties["keyword"].value<std::string>();
 
                            if (keyword.empty()) {
-                               return std::format("Playlist all count: {}", music_list_.size());
+                               return std::format("Playlist all count: {}",
+                                                  music_player_->GetPlaylist().size());
                            }
 
                            MusicHelper music_helper;
-                           auto result =
-                               music_helper.Search(music_list_, keyword, 1, music_list_.size());
+                           auto& playlist = music_player_->GetPlaylist();
+                           auto result = music_helper.Search(playlist, keyword, 1, playlist.size());
                            if (result.empty()) {
                                return std::format("No music matching '{}'", keyword);
                            }
@@ -194,32 +199,32 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         PropertyList({Property("keyword", kPropertyTypeString, "")}),
         [this](const PropertyList& properties) -> ReturnValue {
             auto keyword = properties["keyword"].value<std::string>();
-            if (music_list_.empty()) {
+            if (music_player_ == nullptr || music_player_->GetPlaylist().empty()) {
                 return "Playlist is empty";
             }
             MusicHelper music_helper;
+            auto& playlist = music_player_->GetPlaylist();
             // 关键字为空则清空全部歌单
             if (keyword.empty()) {
+                int total = (int)playlist.size();
                 TryReleaseMusicPlayer();
-                int total = (int)music_list_.size();
-                music_helper.Release(music_list_);
                 auto msg = std::format("Cleared entire playlist, removed {} song(s)", total);
                 ShowMusicMessage(msg);
                 return msg;
             }
 
             // 使用MusicHelper::Search找到匹配的歌曲
-            auto matches = music_helper.Search(music_list_, keyword, 1, music_list_.size());
+            auto matches = music_helper.Search(playlist, keyword, 1, playlist.size());
             if (matches.empty()) {
                 auto msg = std::format("No music matching '{}'", keyword);
                 ShowMusicMessage(msg);
                 return msg;
             }
             TryReleaseMusicPlayer();
-            // 从music_list_中删除匹配的歌曲
-            music_helper.Remove(music_list_, matches);
-            auto msg = std::format("Removed {} song(s), remaining: {}", matches.size(),
-                                   music_list_.size());
+            // 从歌单中删除匹配的歌曲
+            music_helper.Remove(playlist, matches);
+            auto msg =
+                std::format("Removed {} song(s), remaining: {}", matches.size(), playlist.size());
             ShowMusicMessage(msg);
             return msg;
         });
@@ -254,19 +259,10 @@ void MusicManager::TryReleaseMusicPlayer() {
     vTaskDelay(pdMS_TO_TICKS(500));
 }
 
-int MusicManager::AddMusicToPlaylist(std::vector<Music*>& ms, std::vector<Music*>* added_musics) {
-    if (ms.empty()) {
-        return 0;
+void MusicManager::EnsureMusicPlayer() {
+    if (music_player_ == nullptr) {
+        music_player_ = MusicPlayer::NewMusicPlayer();
     }
-    MusicHelper music_helper;
-    std::vector<Music*> added;
-    std::vector<Music*> failed_musics;
-    music_helper.TryAdd(music_list_, ms, added, failed_musics);
-    music_helper.Release(failed_musics);
-    if (added_musics) {
-        *added_musics = std::move(added);
-    }
-    return (int)added.size();
 }
 
 void MusicManager::ShowMusicMessage(const std::string& msg) {

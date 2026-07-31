@@ -53,7 +53,7 @@ public:
     static std::unique_ptr<MusicPlayer> NewMusicPlayer();
 
     virtual bool Play(Music* music, LoopMode mode = LoopMode::kPlayOnce);
-    virtual void Play(const std::vector<Music*>& music_list, LoopMode mode = LoopMode::kPlayOnce);
+    virtual void Play(LoopMode mode = LoopMode::kPlayOnce);
     virtual bool ChangePlayControlMode(const PlayControlMode& mode);
 
     LoopMode GetLoopMode() const { return loop_mode_; }
@@ -61,6 +61,11 @@ public:
     int32_t total_duration_ms() const { return total_duration_ms_; }
     bool IsPlaying() const { return play_state_ != PlayState::kIdle; }
     PlayState GetPlayState() const { return play_state_; }
+
+    // 歌单管理
+    std::vector<Music*>& GetPlaylist() { return current_music_list_; }
+    const std::vector<Music*>& GetPlaylist() const { return current_music_list_; }
+    int AddToPlaylist(std::vector<Music*>& ms, std::vector<Music*>* added_musics = nullptr);
 
     // 从原始数据流检测音频类型（支持 MP3 / AAC(ADTS) / M4A / FLAC）
     static esp_audio_simple_dec_type_t DetectAudioType(const uint8_t* data, size_t size);

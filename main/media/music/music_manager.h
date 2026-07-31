@@ -21,7 +21,9 @@ private:
     MusicManager();
     ~MusicManager() = default;
 
-    void TryResleaseMusicPlayer();
+    void TryReleaseMusicPlayer();
+    int AddMusicToPlaylist(std::vector<Music*>& ms, std::vector<Music*>* added_musics = nullptr);
+    void ShowMusicMessage(const std::string& msg);
 
     std::vector<Music*> music_list_;
 

@@ -1,11 +1,7 @@
 #include "music_manager.h"
-#include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <string.h>
-#include <algorithm>
 #include <format>
-#include "audio_codec.h"
 #include "board.h"
 #include "display.h"
 #include "mcp_server.h"
@@ -38,9 +34,8 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                                (int)MusicPlayer::PlayControlMode::kPause,
                                (int)MusicPlayer::PlayControlMode::kPrevious)}),
         [this](const PropertyList& properties) -> ReturnValue {
-            // Implement play logic here
             auto controlMode = properties["controlMode"].value<int>();
-            if (music_player_ == nullptr || music_player_->IsPlaying() == false) {
+            if (music_player_ == nullptr) {
                 return false;
             }
             music_player_->ChangePlayControlMode(
@@ -70,18 +65,14 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                            auto display = Board::GetInstance().GetDisplay();
                            display->SetChatMessage(
                                "music",
-                               std::format("Search music result count: %d", ms.size()).c_str());
-                           if (ms.empty()) {
+                               std::format("Search music result count: {}", ms.size()).c_str());
+                           std::vector<Music*> added_musics;
+                           auto added_count = AddMusicToPlaylist(ms, &added_musics);
+                           if (added_count == 0) {
                                return "No music found";
                            }
-                           MusicHelper music_helper;
-                           std::vector<Music*> added_musics;
-                           std::vector<Music*> failed_musics;
-
-                           music_helper.TryAdd(music_list_, ms, added_musics, failed_musics);
-                           music_helper.Release(failed_musics);
                            cJSON* root = cJSON_CreateObject();
-                           cJSON_AddNumberToObject(root, "added_count", added_musics.size());
+                           cJSON_AddNumberToObject(root, "added_count", added_count);
                            cJSON_AddNumberToObject(root, "total_count", music_list_.size());
 
                            cJSON* songs_array = cJSON_CreateArray();
@@ -110,16 +101,11 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
             auto resource = MusicResource::NewMusicResource();
             std::vector<Music*> ms;
             resource->GetFavoriteSongs(count, ms);
-            if (ms.empty()) {
+            auto added_count = AddMusicToPlaylist(ms);
+            if (added_count == 0) {
                 return "No favorite songs found";
             }
-            MusicHelper music_helper;
-            std::vector<Music*> added_musics;
-            std::vector<Music*> failed_musics;
-
-            music_helper.TryAdd(music_list_, ms, added_musics, failed_musics);
-            music_helper.Release(failed_musics);
-            return std::format("Favorite songs count: %d", added_musics.size());
+            return std::format("Favorite songs count: {}", added_count);
         });
     tools.push_back(tool);
 
@@ -145,8 +131,7 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
                 static_cast<MusicPlayer::LoopMode>(properties["loopMode"].value<int>());
             music_player_->Play(music_list_, loop_mode);
             const char* mode_names[] = {"play once", "loop", "shuffle"};
-            return std::format("Music playback started ({})",
-                               mode_names[properties["loopMode"].value<int>()]);
+            return std::format("Music playback started ({})", mode_names[(int)loop_mode]);
         });
     tools.push_back(tool);
 
@@ -212,16 +197,14 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
             if (music_list_.empty()) {
                 return "Playlist is empty";
             }
-            auto display = Board::GetInstance().GetDisplay();
             MusicHelper music_helper;
             // 关键字为空则清空全部歌单
             if (keyword.empty()) {
-                TryResleaseMusicPlayer();
-                vTaskDelay(pdMS_TO_TICKS(500));
+                TryReleaseMusicPlayer();
                 int total = (int)music_list_.size();
                 music_helper.Release(music_list_);
                 auto msg = std::format("Cleared entire playlist, removed {} song(s)", total);
-                display->SetChatMessage("music", msg.c_str());
+                ShowMusicMessage(msg);
                 return msg;
             }
 
@@ -229,16 +212,15 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
             auto matches = music_helper.Search(music_list_, keyword, 1, music_list_.size());
             if (matches.empty()) {
                 auto msg = std::format("No music matching '{}'", keyword);
-                display->SetChatMessage("music", msg.c_str());
+                ShowMusicMessage(msg);
                 return msg;
             }
-            TryResleaseMusicPlayer();
-            vTaskDelay(pdMS_TO_TICKS(500));
+            TryReleaseMusicPlayer();
             // 从music_list_中删除匹配的歌曲
             music_helper.Remove(music_list_, matches);
             auto msg = std::format("Removed {} song(s), remaining: {}", matches.size(),
                                    music_list_.size());
-            display->SetChatMessage("music", msg.c_str());
+            ShowMusicMessage(msg);
             return msg;
         });
     tools.push_back(tool);
@@ -267,4 +249,27 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
     tools.push_back(tool);
 }
 
-void MusicManager::TryResleaseMusicPlayer() { music_player_.reset(); }
+void MusicManager::TryReleaseMusicPlayer() {
+    music_player_.reset();
+    vTaskDelay(pdMS_TO_TICKS(500));
+}
+
+int MusicManager::AddMusicToPlaylist(std::vector<Music*>& ms, std::vector<Music*>* added_musics) {
+    if (ms.empty()) {
+        return 0;
+    }
+    MusicHelper music_helper;
+    std::vector<Music*> added;
+    std::vector<Music*> failed_musics;
+    music_helper.TryAdd(music_list_, ms, added, failed_musics);
+    music_helper.Release(failed_musics);
+    if (added_musics) {
+        *added_musics = std::move(added);
+    }
+    return (int)added.size();
+}
+
+void MusicManager::ShowMusicMessage(const std::string& msg) {
+    auto display = Board::GetInstance().GetDisplay();
+    display->SetChatMessage("music", msg.c_str());
+}

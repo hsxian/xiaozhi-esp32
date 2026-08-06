@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -29,6 +30,8 @@ ARTIFACTS = {
     "ota": Path("build/xiaozhi.bin"),
     "full": Path("build/merged-binary.bin"),
 }
+OSS_UPLOAD_MAX_ATTEMPTS = 4
+OSS_UPLOAD_BASE_DELAY_SECONDS = 1
 
 
 def utc_now() -> str:
@@ -83,13 +86,19 @@ def parser() -> argparse.ArgumentParser:
         description=(
             "Build one XiaoZhi firmware board configuration. Arguments may also "
             "be supplied through FIRMWARE_BOARD_DIR, FIRMWARE_BOARD_NAME, "
-            "FIRMWARE_LANGUAGE, and FIRMWARE_WAKE_WORD."
+            "FIRMWARE_LANGUAGE, FIRMWARE_WAKE_WORD, and "
+            "FIRMWARE_BUILD_OPTIONS."
         )
     )
     result.add_argument("--board-dir", default=env("FIRMWARE_BOARD_DIR"))
     result.add_argument("--board-name", default=env("FIRMWARE_BOARD_NAME"))
     result.add_argument("--language", default=env("FIRMWARE_LANGUAGE"))
     result.add_argument("--wake-word", default=env("FIRMWARE_WAKE_WORD"))
+    result.add_argument(
+        "--build-options-json",
+        default=env("FIRMWARE_BUILD_OPTIONS") or "{}",
+        help="Curated semantic build options as a JSON object",
+    )
     result.add_argument(
         "--source-dir",
         type=Path,
@@ -134,6 +143,30 @@ def validate(args: argparse.Namespace) -> None:
     if not SAFE_WAKE_WORD.fullmatch(normalized_wake_word):
         raise ValueError(f"Invalid wake word: {args.wake_word!r}")
     args.wake_word = normalized_wake_word
+
+    try:
+        build_options = json.loads(args.build_options_json)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Invalid build options JSON: {error}") from error
+    if not isinstance(build_options, dict):
+        raise ValueError("Build options JSON must contain an object")
+    invalid_values = [
+        key
+        for key, value in build_options.items()
+        if not isinstance(key, str) or not isinstance(value, (str, bool))
+    ]
+    if invalid_values:
+        raise ValueError(
+            "Build option values must be strings or booleans: "
+            + ", ".join(map(str, invalid_values))
+        )
+    args.build_options = build_options
+    args.build_options_json = json.dumps(
+        build_options,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
     build_script = args.source_dir / "scripts/build.py"
     if not build_script.is_file():
@@ -251,6 +284,56 @@ def write_manifest(output_dir: Path, manifest: dict[str, object]) -> None:
     temporary.replace(path)
 
 
+def is_retryable_oss_error(error: Exception, oss2: Any) -> bool:
+    exceptions = getattr(oss2, "exceptions", None)
+    request_error = getattr(exceptions, "RequestError", None)
+    if isinstance(request_error, type) and isinstance(error, request_error):
+        return True
+
+    server_error = getattr(exceptions, "ServerError", None)
+    if isinstance(server_error, type) and isinstance(error, server_error):
+        status = getattr(error, "status", getattr(error, "status_code", None))
+        code = str(getattr(error, "code", ""))
+        return (
+            status in {408, 429}
+            or isinstance(status, int) and status >= 500
+            or code in {
+                "InternalError",
+                "RequestTimeout",
+                "ServiceUnavailable",
+                "Throttling",
+            }
+        )
+
+    return isinstance(error, (ConnectionError, TimeoutError, OSError))
+
+
+def upload_file_with_retry(
+    bucket: Any,
+    object_key: str,
+    local_path: Path,
+    oss2: Any,
+) -> None:
+    for attempt in range(1, OSS_UPLOAD_MAX_ATTEMPTS + 1):
+        try:
+            bucket.put_object_from_file(object_key, str(local_path))
+            return
+        except Exception as error:
+            if (
+                attempt >= OSS_UPLOAD_MAX_ATTEMPTS
+                or not is_retryable_oss_error(error, oss2)
+            ):
+                raise
+            delay = OSS_UPLOAD_BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+            print(
+                "firmware-builder: transient OSS upload failure for "
+                f"{local_path.name}; retry {attempt + 1}/"
+                f"{OSS_UPLOAD_MAX_ATTEMPTS} in {delay}s: {error}",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+
+
 def upload_outputs(
     output_dir: Path,
     manifest: dict[str, Any],
@@ -286,12 +369,20 @@ def upload_outputs(
     auth = oss2.Auth(config["access_key_id"], config["access_key_secret"])
     bucket = oss2.Bucket(auth, config["endpoint"], config["bucket"])
     for name in file_names[:-1]:
-        bucket.put_object_from_file(object_keys[name], str(output_dir / name))
+        upload_file_with_retry(
+            bucket,
+            object_keys[name],
+            output_dir / name,
+            oss2,
+        )
 
     manifest["delivery_status"] = "succeeded"
     write_manifest(output_dir, manifest)
-    bucket.put_object_from_file(
-        object_keys["manifest.json"], str(output_dir / "manifest.json")
+    upload_file_with_retry(
+        bucket,
+        object_keys["manifest.json"],
+        output_dir / "manifest.json",
+        oss2,
     )
 
 
@@ -316,6 +407,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "board_name": args.board_name,
         "language": args.language,
         "wake_word": args.wake_word,
+        "build_options": args.build_options,
         "firmware_version": project_version(args.source_dir),
         "firmware_source_revision": env("FIRMWARE_SOURCE_REVISION") or "unknown",
         "idf_version": command_output(["idf.py", "--version"], args.source_dir),
@@ -336,6 +428,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.language,
         "--wake-word",
         args.wake_word,
+        "--build-options-json",
+        args.build_options_json,
     ]
     return_code = run_and_log(command, args.source_dir, log_path)
     manifest["finished_at"] = utc_now()

@@ -70,6 +70,8 @@ sys.exit(%d)
                         "zh-CN",
                         "--wake-word",
                         "nihaoxiaozhi",
+                        "--build-options-json",
+                        '{"wifi_provisioning":"blufi","multiline_chat":false}',
                         "--source-dir",
                         str(source),
                         "--output-dir",
@@ -89,6 +91,16 @@ sys.exit(%d)
             self.assertEqual(manifest["board_dir"], "xmini/c3")
             self.assertEqual(manifest["board_type"], "xmini-c3")
             self.assertEqual(manifest["board_name"], "xmini-c3")
+            self.assertEqual(
+                manifest["build_options"],
+                {"wifi_provisioning": "blufi", "multiline_chat": False},
+            )
+            build_log = (output / "build.log").read_text(encoding="utf-8")
+            self.assertIn("--build-options-json", build_log)
+            self.assertIn(
+                '{\\"multiline_chat\\":false,\\"wifi_provisioning\\":\\"blufi\\"}',
+                build_log,
+            )
             self.assertNotIn("variant", manifest)
             self.assertTrue(manifest["runtime_architecture"])
             self.assertGreaterEqual(manifest["runtime_cpu_count"], 1)
@@ -186,6 +198,119 @@ sys.exit(%d)
             self.assertEqual(manifest["delivery_status"], "succeeded")
             self.assertNotIn("test-secret", json.dumps(manifest))
 
+    def test_transient_oss_upload_is_retried_with_exponential_backoff(self) -> None:
+        class FakeRequestError(Exception):
+            pass
+
+        class FakeBucket:
+            attempts = 0
+
+            def put_object_from_file(self, key: str, path: str) -> None:
+                self.attempts += 1
+                if self.attempts < 3:
+                    raise FakeRequestError("connection timed out")
+
+        fake_oss2 = types.SimpleNamespace(
+            exceptions=types.SimpleNamespace(
+                RequestError=FakeRequestError,
+                ServerError=type("FakeServerError", (Exception,), {}),
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            local_path = Path(temporary) / "build.log"
+            local_path.write_text("build output", encoding="utf-8")
+            bucket = FakeBucket()
+            with patch.object(firmware_builder.time, "sleep") as sleep:
+                firmware_builder.upload_file_with_retry(
+                    bucket,
+                    "firmware/test/build.log",
+                    local_path,
+                    fake_oss2,
+                )
+
+        self.assertEqual(bucket.attempts, 3)
+        self.assertEqual(
+            [call.args[0] for call in sleep.call_args_list],
+            [1, 2],
+        )
+
+    def test_transient_oss_upload_fails_after_retry_limit(self) -> None:
+        class FakeRequestError(Exception):
+            pass
+
+        class FakeBucket:
+            attempts = 0
+
+            def put_object_from_file(self, key: str, path: str) -> None:
+                self.attempts += 1
+                raise FakeRequestError("connection timed out")
+
+        fake_oss2 = types.SimpleNamespace(
+            exceptions=types.SimpleNamespace(
+                RequestError=FakeRequestError,
+                ServerError=type("FakeServerError", (Exception,), {}),
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            local_path = Path(temporary) / "build.log"
+            local_path.write_text("build output", encoding="utf-8")
+            bucket = FakeBucket()
+            with (
+                patch.object(firmware_builder.time, "sleep") as sleep,
+                self.assertRaisesRegex(FakeRequestError, "connection timed out"),
+            ):
+                firmware_builder.upload_file_with_retry(
+                    bucket,
+                    "firmware/test/build.log",
+                    local_path,
+                    fake_oss2,
+                )
+
+        self.assertEqual(bucket.attempts, firmware_builder.OSS_UPLOAD_MAX_ATTEMPTS)
+        self.assertEqual(
+            [call.args[0] for call in sleep.call_args_list],
+            [1, 2, 4],
+        )
+
+    def test_permanent_oss_upload_error_is_not_retried(self) -> None:
+        class FakeServerError(Exception):
+            status = 403
+            code = "AccessDenied"
+
+        class FakeBucket:
+            attempts = 0
+
+            def put_object_from_file(self, key: str, path: str) -> None:
+                self.attempts += 1
+                raise FakeServerError("access denied")
+
+        fake_oss2 = types.SimpleNamespace(
+            exceptions=types.SimpleNamespace(
+                RequestError=type("FakeRequestError", (Exception,), {}),
+                ServerError=FakeServerError,
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            local_path = Path(temporary) / "build.log"
+            local_path.write_text("build output", encoding="utf-8")
+            bucket = FakeBucket()
+            with (
+                patch.object(firmware_builder.time, "sleep") as sleep,
+                self.assertRaisesRegex(FakeServerError, "access denied"),
+            ):
+                firmware_builder.upload_file_with_retry(
+                    bucket,
+                    "firmware/test/build.log",
+                    local_path,
+                    fake_oss2,
+                )
+
+        self.assertEqual(bucket.attempts, 1)
+        sleep.assert_not_called()
+
     def test_rejects_path_traversal_board(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source = self.create_source(Path(temporary))
@@ -218,6 +343,27 @@ sys.exit(%d)
                     "en-US",
                     "--wake-word",
                     "disabled",
+                    "--source-dir",
+                    str(source),
+                ]
+            )
+            self.assertEqual(exit_code, 2)
+
+    def test_rejects_invalid_build_options(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = self.create_source(Path(temporary))
+            exit_code = firmware_builder.main(
+                [
+                    "--board-dir",
+                    "xmini/c3",
+                    "--board-name",
+                    "xmini-c3",
+                    "--language",
+                    "en-US",
+                    "--wake-word",
+                    "disabled",
+                    "--build-options-json",
+                    '["not-an-object"]',
                     "--source-dir",
                     str(source),
                 ]

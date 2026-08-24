@@ -62,7 +62,7 @@ bool QQMusicResource::Search(const QueryBase& query, std::vector<Music*>& music_
 }
 
 bool QQMusicResource::GetFavoriteSongs(const int& count, std::vector<Music*>& music_list) {
-    constexpr int kMaxNumPerPage = 50;
+    constexpr int kMaxNumPerPage = 300;
     int remaining = count;
     int page = 0;
     bool success = false;

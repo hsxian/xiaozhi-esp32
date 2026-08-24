@@ -32,7 +32,7 @@ public:
     bool RemoveAllAlarms();
 
     // 获取所有闹钟
-    std::vector<Alarm*> GetAlarms() const;
+    const std::vector<std::unique_ptr<Alarm>>& GetAlarms() const;
 
     // 获取单个闹钟
     Alarm* GetAlarm(const std::string& alarm_id) const;
@@ -53,7 +53,7 @@ public:
     void AddHoliday(const Holiday& holiday);
 
     // 获取节假日列表
-    std::vector<Holiday> GetHolidays() const;
+    const std::vector<Holiday>& GetHolidays() const;
 
     // 检查某天是否是节假日
     bool IsHoliday(int month, int day, int weekday) const;
@@ -102,7 +102,7 @@ private:
     void RingingTask(void* data);
     void StopRingingTask();
 
-    std::vector<Alarm*> alarms_;
+    std::vector<std::unique_ptr<Alarm>> alarms_;
     std::vector<Holiday> holidays_;
     esp_timer_handle_t timer_handle_;
     TaskHandle_t ringing_task_handle_{nullptr};

@@ -64,7 +64,7 @@ public:
 
     // 歌单管理
     std::vector<Music*>& GetPlaylist() { return current_music_list_; }
-    const std::vector<Music*>& GetPlaylist() const { return current_music_list_; }
+
     int AddToPlaylist(std::vector<Music*>& ms, std::vector<Music*>* added_musics = nullptr);
 
     // 从原始数据流检测音频类型（支持 MP3 / AAC(ADTS) / M4A / FLAC）

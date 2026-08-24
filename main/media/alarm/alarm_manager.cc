@@ -43,9 +43,6 @@ AlarmManager::~AlarmManager() {
         esp_timer_stop(timer_handle_);
         esp_timer_delete(timer_handle_);
     }
-    for (auto& a : alarms_) {
-        delete a;
-    }
     alarms_.clear();
     current_ringing_alarm_ = nullptr;
     Application::GetInstance().BeforeHandleToggleChatEventListener().RemoveEventListener(
@@ -149,7 +146,11 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         PropertyList({Property("name", kPropertyTypeString)}),
         [this](const PropertyList& properties) -> ReturnValue {
             std::string name = properties["name"].value<std::string>();
-            std::vector<Alarm*> alarms_found = Alarm::findByName(alarms_, name);
+            std::vector<Alarm*> alarm_ptrs;
+            alarm_ptrs.reserve(alarms_.size());
+            for (const auto& a : alarms_)
+                alarm_ptrs.push_back(a.get());
+            std::vector<Alarm*> alarms_found = Alarm::findByName(alarm_ptrs, name);
             return Alarm::ToJsonArray(alarms_found);
         });
     tools.push_back(tool);
@@ -161,7 +162,11 @@ void AlarmManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         PropertyList({Property("name", kPropertyTypeString)}),
         [this](const PropertyList& properties) -> ReturnValue {
             std::string name = properties["name"].value<std::string>();
-            std::vector<Alarm*> alarms_found = Alarm::findByName(alarms_, name);
+            std::vector<Alarm*> alarm_ptrs;
+            alarm_ptrs.reserve(alarms_.size());
+            for (const auto& a : alarms_)
+                alarm_ptrs.push_back(a.get());
+            std::vector<Alarm*> alarms_found = Alarm::findByName(alarm_ptrs, name);
             for (const auto& alarm : alarms_found) {
                 RemoveAlarm(alarm->id);
             }
@@ -208,7 +213,7 @@ void AlarmManager::LoadAlarms() {
         if (!alarm.FromJson(json)) {
             continue;
         }
-        alarms_.push_back(new Alarm(alarm));
+        alarms_.push_back(std::make_unique<Alarm>(alarm));
     }
 
     nvs_close(nvs_handle);
@@ -222,21 +227,14 @@ void AlarmManager::SaveAlarms() {
         return;
     }
 
-    // 清除旧数据
-    err = nvs_erase_all(nvs_handle);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to erase NVS");
-        nvs_close(nvs_handle);
-        return;
-    }
-
     // 相对时间闹钟和一次性闹钟不保存
-    auto save_alarms = std::vector<Alarm*>();
+    std::vector<Alarm*> save_alarms;
+    save_alarms.reserve(alarms_.size());
     for (const auto& alarm : alarms_) {
         if (alarm->repeat_mode == RepeatMode::ONCE) {
             continue;
         }
-        save_alarms.push_back(alarm);
+        save_alarms.push_back(alarm.get());
     }
     ESP_LOGI(TAG, "Saving %d alarms to NVS %s", save_alarms.size(), RECORD_FILE_NAME);
     // 保存闹钟数量
@@ -276,7 +274,7 @@ void AlarmManager::LoadHolidays() {
     holidays_.clear();
 
     // 获取当前年份
-    time_t now = time(nullptr) + 2 * 60;
+    time_t now = time(nullptr);
     struct tm tm;
     localtime_r(&now, &tm);
     int current_year = tm.tm_year + 1900;
@@ -354,7 +352,7 @@ bool AlarmManager::AddAlarm(const Alarm& alarm) {
         }
     }
 
-    alarms_.push_back(new Alarm(alarm));
+    alarms_.push_back(std::make_unique<Alarm>(alarm));
     SaveAlarms();
     UpdateTimerLocked();
 
@@ -369,7 +367,7 @@ bool AlarmManager::RemoveAlarm(const std::string& alarm_id) {
 }
 bool AlarmManager::RemoveAlarmLocked(const std::string& alarm_id) {
     auto it = std::find_if(alarms_.begin(), alarms_.end(),
-                           [&](const Alarm* a) { return a->id == alarm_id; });
+                           [&](const auto& a) { return a->id == alarm_id; });
 
     if (it == alarms_.end()) {
         ESP_LOGW(TAG, "Alarm not found: %s", alarm_id.c_str());
@@ -377,10 +375,9 @@ bool AlarmManager::RemoveAlarmLocked(const std::string& alarm_id) {
     }
 
     ESP_LOGI(TAG, "Removed alarm: %s (%s)", (*it)->name.c_str(), alarm_id.c_str());
-    if (*it == current_ringing_alarm_) {
+    if (it->get() == current_ringing_alarm_) {
         current_ringing_alarm_ = nullptr;
     }
-    delete *it;
     alarms_.erase(it);
     SaveAlarms();
     UpdateTimerLocked();
@@ -389,26 +386,23 @@ bool AlarmManager::RemoveAlarmLocked(const std::string& alarm_id) {
 
 bool AlarmManager::RemoveAllAlarms() {
     std::lock_guard<std::mutex> lock(mutex_);
-    for (auto& a : alarms_) {
-        delete a;
-    }
     alarms_.clear();
     SaveAlarms();
     UpdateTimerLocked();
     return true;
 }
 
-std::vector<Alarm*> AlarmManager::GetAlarms() const { return alarms_; }
+const std::vector<std::unique_ptr<Alarm>>& AlarmManager::GetAlarms() const { return alarms_; }
 
 Alarm* AlarmManager::GetAlarm(const std::string& alarm_id) const {
     auto it = std::find_if(alarms_.begin(), alarms_.end(),
-                           [&](const Alarm* a) { return a->id == alarm_id; });
+                           [&](const auto& a) { return a->id == alarm_id; });
 
     if (it == alarms_.end()) {
         return nullptr;
     }
 
-    return *it;
+    return it->get();
 }
 
 bool AlarmManager::UpdateAlarm(const Alarm& alarm) {
@@ -511,7 +505,7 @@ void AlarmManager::Snooze() {
 
 void AlarmManager::AddHoliday(const Holiday& holiday) { holidays_.push_back(holiday); }
 
-std::vector<Holiday> AlarmManager::GetHolidays() const { return holidays_; }
+const std::vector<Holiday>& AlarmManager::GetHolidays() const { return holidays_; }
 
 bool AlarmManager::IsHoliday(int month, int day, int weekday) const {
     // 先查节假日列表中的特殊日期
@@ -571,11 +565,6 @@ bool AlarmManager::ShouldRingAtDate(const time_t& now, const Alarm& alarm) const
         ret, alarm.hour, alarm.minute, alarm.second, weekday, alarm.repeat_mode, alarm.repeat_days);
     return ret;
 }
-char* to_string(int64_t val) {
-    static char buf[20];
-    itoa(val, buf, 10);
-    return buf;
-}
 
 void AlarmManager::UpdateTimer() {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -601,7 +590,7 @@ Alarm* AlarmManager::GetNextRingAtTime(const time_t& now, int64_t& next_ring_tim
                  alarm->hour, alarm->minute, alarm->second, alarm->repeat_mode, alarm->repeat_days);
         for (int i = 0; i < 7; i++) {
             time_t check_time = now + i * 86400;
-            // 检查今天是否应该响铃
+            // 检查是否应该响铃
             if (!ShouldRingAtDate(check_time, *alarm)) {
                 continue;
             }
@@ -610,7 +599,7 @@ Alarm* AlarmManager::GetNextRingAtTime(const time_t& now, int64_t& next_ring_tim
             auto delay = difftime(alarm_time, now);
             if (delay > 0 && delay < min_delay) {
                 min_delay = delay;
-                next_alarm = alarm;
+                next_alarm = alarm.get();
             }
         }
     }
@@ -671,7 +660,7 @@ void AlarmManager::OnAlarmTriggered() {
         // 设置为响铃状态
         alarm->state = AlarmState::RINGING;
         alarm->start_ring_time = now;
-        current_ringing_alarm_ = alarm;
+        current_ringing_alarm_ = alarm.get();
         is_ringing_ = true;
 
         RaiseAlarmRinging(*alarm);
@@ -785,9 +774,10 @@ void AlarmManager::StopRingingTask() {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
     if (ringing_task_handle_) {
+        TaskHandle_t handle = ringing_task_handle_;
         ringing_task_handle_ = nullptr;
         ESP_LOGI(TAG, "Stopping ringing task");
-        vTaskDelete(ringing_task_handle_);
+        vTaskDelete(handle);
     }
 }
 bool AlarmManager::IsRinging() const { return is_ringing_; }

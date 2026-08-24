@@ -45,50 +45,49 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
     tools.push_back(tool);
 
     // 搜索音乐，结果存入歌单
-    tool = new McpTool("self.music.search",
-                       "a tool to search music from the internet and store results in the "
-                       "playlist. Use self.music.playlist to view the playlist, then use "
-                       "self.music.play to play a song by index. You must provide a keyword to "
-                       "search, and you can also provide page number and page size for pagination.",
-                       PropertyList({Property("keyword", kPropertyTypeString),
-                                     Property("page", kPropertyTypeInteger, 1),
-                                     Property("pageSize", kPropertyTypeInteger, 10)}),
-                       [this](const PropertyList& properties) -> ReturnValue {
-                           QueryBase query;
-                           query.keyword = properties["keyword"].value<std::string>();
-                           query.page = properties["page"].value<int>();
-                           query.page_size = properties["pageSize"].value<int>();
+    tool = new McpTool(
+        "self.music.search",
+        "a tool to search music from the internet and store results in the "
+        "playlist. Use self.music.playlist to view the playlist, then use "
+        "self.music.play to play a song by index. You must provide a keyword to "
+        "search, and you can also provide page number and page size for pagination.",
+        PropertyList({Property("keyword", kPropertyTypeString),
+                      Property("page", kPropertyTypeInteger, 1),
+                      Property("pageSize", kPropertyTypeInteger, 10)}),
+        [this](const PropertyList& properties) -> ReturnValue {
+            QueryBase query;
+            query.keyword = properties["keyword"].value<std::string>();
+            query.page = properties["page"].value<int>();
+            query.page_size = properties["pageSize"].value<int>();
 
-                           auto resource = MusicResource::NewMusicResource();
-                           std::vector<Music*> ms;
-                           resource->Search(query, ms);
-                           auto display = Board::GetInstance().GetDisplay();
-                           display->SetChatMessage(
-                               "music",
-                               std::format("Search music result count: {}", ms.size()).c_str());
-                           std::vector<Music*> added_musics;
-                           EnsureMusicPlayer();
-                           auto added_count = music_player_->AddToPlaylist(ms, &added_musics);
-                           if (added_count == 0) {
-                               return "No music found";
-                           }
-                           cJSON* root = cJSON_CreateObject();
-                           cJSON_AddNumberToObject(root, "added_count", added_count);
-                           cJSON_AddNumberToObject(root, "total_count",
-                                                   music_player_->GetPlaylist().size());
+            auto resource = MusicResource::NewMusicResource();
+            std::vector<Music*> ms;
+            resource->Search(query, ms);
+            auto display = Board::GetInstance().GetDisplay();
+            display->SetChatMessage(
+                "music", std::format("Search music result count: {}", ms.size()).c_str());
+            std::vector<Music*> added_musics;
+            EnsureMusicPlayer();
+            auto added_count = music_player_->AddToPlaylist(ms, &added_musics);
+            if (added_count == 0) {
+                return "No music found";
+            }
+            cJSON* root = cJSON_CreateObject();
+            cJSON_AddNumberToObject(root, "added_count", added_count);
+            cJSON_AddNumberToObject(root, "total_count", music_player_->GetPlaylist().size());
 
-                           cJSON* songs_array = cJSON_CreateArray();
-                           for (auto* music : added_musics) {
-                               cJSON* song_obj = cJSON_CreateObject();
-                               music->ToJsonSimple(song_obj);
-                               cJSON_AddItemToArray(songs_array, song_obj);
-                           }
-                           cJSON_AddItemToObject(root, "songs", songs_array);
+            cJSON* songs_array = cJSON_CreateArray();
+            for (auto* music : added_musics) {
+                cJSON* song_obj = cJSON_CreateObject();
+                music->ToJsonSimple(song_obj);
+                cJSON_AddItemToArray(songs_array, song_obj);
+            }
+            cJSON_AddItemToObject(root, "songs", songs_array);
 
-                           auto json_str = cJSON_Print(root);
-                           cJSON_Delete(root);
-                           return json_str;
-                       });
+            auto json_str = cJSON_Print(root);
+            cJSON_Delete(root);
+            return json_str;
+        });
     tools.push_back(tool);
 
     // 获取收藏音乐
@@ -199,33 +198,33 @@ void MusicManager::GenerateMcpServerTools(std::vector<McpTool*>& tools) {
         PropertyList({Property("keyword", kPropertyTypeString, "")}),
         [this](const PropertyList& properties) -> ReturnValue {
             auto keyword = properties["keyword"].value<std::string>();
-            if (music_player_ == nullptr || music_player_->GetPlaylist().empty()) {
+            if (music_player_ == nullptr) {
                 return "Playlist is empty";
             }
             MusicHelper music_helper;
             auto& playlist = music_player_->GetPlaylist();
+            std::string msg;
             // 关键字为空则清空全部歌单
             if (keyword.empty()) {
                 int total = (int)playlist.size();
-                TryReleaseMusicPlayer();
-                auto msg = std::format("Cleared entire playlist, removed {} song(s)", total);
-                ShowMusicMessage(msg);
-                return msg;
+                msg = std::format("Cleared entire playlist, removed {} song(s)", total);
+                music_helper.Release(playlist);
+            } else {
+                // 使用MusicHelper::Search找到匹配的歌曲
+                auto matches = music_helper.Search(playlist, keyword, 1, playlist.size());
+                if (matches.empty()) {
+                    msg = std::format("No music matching '{}'", keyword);
+                } else {
+                    // 从歌单中删除匹配的歌曲
+                    music_helper.Remove(playlist, matches);
+                    msg = std::format("Removed {} song(s), remaining: {}", matches.size(),
+                                      playlist.size());
+                }
             }
-
-            // 使用MusicHelper::Search找到匹配的歌曲
-            auto matches = music_helper.Search(playlist, keyword, 1, playlist.size());
-            if (matches.empty()) {
-                auto msg = std::format("No music matching '{}'", keyword);
-                ShowMusicMessage(msg);
-                return msg;
-            }
-            TryReleaseMusicPlayer();
-            // 从歌单中删除匹配的歌曲
-            music_helper.Remove(playlist, matches);
-            auto msg =
-                std::format("Removed {} song(s), remaining: {}", matches.size(), playlist.size());
             ShowMusicMessage(msg);
+            if (playlist.empty()) {
+                TryReleaseMusicPlayer();
+            }
             return msg;
         });
     tools.push_back(tool);

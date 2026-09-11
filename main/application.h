@@ -19,11 +19,8 @@
 #include "audio_service.h"
 #include "device_state.h"
 #include "device_state_machine.h"
-<<<<<<< HEAD
 #include "media/common/event_listener.h"
-=======
 #include "notify/notify_player.h"
->>>>>>> upstream/main
 
 // Main event bits
 #define MAIN_EVENT_SCHEDULE             (1 << 0)

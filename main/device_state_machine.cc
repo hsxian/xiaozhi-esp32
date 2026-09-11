@@ -97,17 +97,14 @@ bool DeviceStateMachine::IsValidTransition(DeviceState from, DeviceState to) con
             return to == kDeviceStateListening ||
                    to == kDeviceStateIdle;
 
-<<<<<<< HEAD
         case kDeviceStateAlarmClock:
             // Can go to listening or idle
             return to == kDeviceStateListening || 
                    to == kDeviceStateIdle ||
                    to == kDeviceStateSpeaking
                    ;
-=======
         case kDeviceStateNotifying:
             return to == kDeviceStateIdle;
->>>>>>> upstream/main
 
         case kDeviceStateFatalError:
             // Cannot transition out of fatal error
